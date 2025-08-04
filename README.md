@@ -1,10 +1,10 @@
 # Broker Bridge Service
 
-A Go service that acts as a message bridge between RabbitMQ and EMQX MQTT brokers.
+A Go service that acts as a message bridge between AMQP and EMQX MQTT brokers.
 
 ## Features
 
-- **Message Bridging**: Routes messages between RabbitMQ and EMQX brokers
+- **Message Bridging**: Routes messages between AMQP and EMQX brokers
 - **MQTT Integration**: Subscribes to EMQX for device location data
 - **Protocol Translation**: Handles message format conversion between brokers
 - **Real-time Processing**: Processes device messages in real-time
@@ -12,7 +12,7 @@ A Go service that acts as a message bridge between RabbitMQ and EMQX MQTT broker
 ## Architecture
 
 ```
-RabbitMQ ←→ Broker Bridge Service ←→ EMQX MQTT
+AMQP ←→ Broker Bridge Service ←→ EMQX MQTT
                      ↓
            Frontend Clients (MQTT over WebSocket directly to EMQX)
 ```

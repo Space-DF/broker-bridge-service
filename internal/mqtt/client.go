@@ -33,7 +33,7 @@ func NewClient(cfg config.MQTTConfig) *Client {
 func (c *Client) Connect() error {
 	// Configure MQTT client options
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(c.config.BrokerURL)
+	opts.AddBroker(c.config.GetBrokerURL())
 	opts.SetClientID(c.config.ClientID)
 	opts.SetUsername(c.config.Username)
 	opts.SetPassword(c.config.Password)
@@ -54,7 +54,7 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("failed to connect to EMQX: %w", token.Error())
 	}
 
-	log.Printf("Successfully connected to EMQX at %s", c.config.BrokerURL)
+	log.Printf("Successfully connected to EMQX at %s", c.config.GetBrokerURL())
 	return nil
 }
 
@@ -159,4 +159,10 @@ func (c *Client) Publish(topic string, payload interface{}) error {
 
 	log.Printf("Published message to topic: %s", topic)
 	return nil
+}
+
+// PublishDeviceTelemetry publishes device location data to device/{device_id}/telemetry topic
+func (c *Client) PublishDeviceTelemetry(deviceID string, locationUpdate *models.DeviceLocationUpdate) error {
+	topic := fmt.Sprintf("device/%s/telemetry", deviceID)
+	return c.Publish(topic, locationUpdate)
 }

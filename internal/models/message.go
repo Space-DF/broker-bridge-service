@@ -2,6 +2,7 @@ package models
 
 import (
 	"time"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // DeviceMessage represents a message received from EMQX
@@ -52,6 +53,12 @@ type DeviceLocationUpdate struct {
 	Accuracy    string    `json:"accuracy,omitempty"`
 	Timestamp   time.Time `json:"timestamp"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// AMQPMessageWithDelivery combines location update with AMQP delivery info for reliable processing
+type AMQPMessageWithDelivery struct {
+	LocationUpdate *DeviceLocationUpdate
+	Delivery       *amqp.Delivery
 }
 
 // DeviceStatusUpdate represents device status changes

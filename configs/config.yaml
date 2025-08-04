@@ -8,7 +8,8 @@ server:
 
 # EMQX MQTT Configuration
 mqtt:
-  broker_url: "tcp://emqx:1883"
+  broker: "localhost"
+  port: 1883
   client_id: "broker-bridge-service"
   username: "admin"
   password: "public"
@@ -20,6 +21,18 @@ mqtt:
   keep_alive: 60
   connect_timeout: "10s"
   reconnect_delay: "5s"
+
+# AMQP Configuration
+amqp:
+  url: "amqp://guest:guest@localhost:5672/"
+  exchange: ""
+  queue: "transformed/device/location"
+  routing_key: "transformed/device/location"
+  consumer_tag: "broker-bridge-consumer"
+  auto_ack: false
+  exclusive: false
+  no_local: false
+  no_wait: false
 
 # Rate Limiting Configuration
 rate_limit:

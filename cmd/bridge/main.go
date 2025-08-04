@@ -12,20 +12,20 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
-	"github.com/Space-DF/broker-bridge-service/internal/gateway"
+	"github.com/Space-DF/broker-bridge-service/internal/bridge"
 )
 
 var (
 	configFile string
 	rootCmd    = &cobra.Command{
-		Use:   "gateway",
+		Use:   "bridge",
 		Short: "Broker Bridge Service for SpaceDF",
-		Long:  "A message bridge service that routes messages between RabbitMQ and EMQX MQTT brokers",
+		Long:  "A message bridge service that routes messages between AMQP and EMQX MQTT brokers",
 	}
 
 	serveCmd = &cobra.Command{
 		Use:   "serve",
-		Short: "Start the gateway server",
+		Short: "Start the bridge server",
 		Run:   runServer,
 	}
 )
@@ -48,8 +48,8 @@ func runServer(cmd *cobra.Command, args []string) {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Create gateway instance
-	gw := gateway.NewGateway(cfg)
+	// Create bridge instance
+	br := bridge.NewBridge(cfg)
 
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -59,11 +59,11 @@ func runServer(cmd *cobra.Command, args []string) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start gateway in goroutine
-	gatewayErr := make(chan error, 1)
+	// Start bridge in goroutine
+	bridgeErr := make(chan error, 1)
 	go func() {
-		if err := gw.Start(ctx); err != nil {
-			gatewayErr <- err
+		if err := br.Start(ctx); err != nil {
+			bridgeErr <- err
 		}
 	}()
 
@@ -94,8 +94,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	select {
 	case sig := <-sigChan:
 		log.Printf("Received signal: %v", sig)
-	case err := <-gatewayErr:
-		log.Printf("Gateway error: %v", err)
+	case err := <-bridgeErr:
+		log.Printf("Bridge error: %v", err)
 	case err := <-serverErr:
 		log.Printf("Server error: %v", err)
 	}
@@ -103,7 +103,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Graceful shutdown
 	log.Println("Shutting down...")
 	
-	// Cancel context to stop gateway
+	// Cancel context to stop bridge
 	cancel()
 
 	// Shutdown HTTP server
@@ -114,9 +114,9 @@ func runServer(cmd *cobra.Command, args []string) {
 		log.Printf("HTTP server shutdown error: %v", err)
 	}
 
-	// Stop gateway
-	if err := gw.Stop(); err != nil {
-		log.Printf("Gateway stop error: %v", err)
+	// Stop bridge
+	if err := br.Stop(); err != nil {
+		log.Printf("Bridge stop error: %v", err)
 	}
 
 	log.Println("Shutdown complete")

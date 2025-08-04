@@ -2,11 +2,11 @@
 
 # Build the application
 build:
-	go build -o bin/gateway cmd/gateway/main.go
+	go build -o bin/bridge cmd/bridge/main.go
 
 # Run the application
 run:
-	go run cmd/gateway/main.go serve
+	go run cmd/bridge/main.go serve
 
 # Clean build artifacts
 clean:
@@ -25,9 +25,10 @@ deps:
 	go mod download
 	go mod tidy
 
-# Development mode with hot reload
+# Development mode
 dev:
-	air -c .air.toml
+	@echo "Running in development mode..."
+	go run ./cmd/bridge serve
 
 # Docker build
 docker-build:

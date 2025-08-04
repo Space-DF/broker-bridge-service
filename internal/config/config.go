@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 type Config struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	MQTT      MQTTConfig      `mapstructure:"mqtt"`
+	AMQP  AMQPConfig  `mapstructure:"amqp"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 }
 
@@ -24,7 +26,8 @@ type ServerConfig struct {
 }
 
 type MQTTConfig struct {
-	BrokerURL       string        `mapstructure:"broker_url" env:"MQTT_BROKER_URL"`
+	Broker          string        `mapstructure:"broker" env:"MQTT_BROKER"`
+	Port            int           `mapstructure:"port" env:"MQTT_PORT"`
 	ClientID        string        `mapstructure:"client_id" env:"MQTT_CLIENT_ID"`
 	Username        string        `mapstructure:"username" env:"MQTT_USERNAME"`
 	Password        string        `mapstructure:"password" env:"MQTT_PASSWORD"`
@@ -36,6 +39,22 @@ type MQTTConfig struct {
 	ReconnectDelay  time.Duration `mapstructure:"reconnect_delay" env:"MQTT_RECONNECT_DELAY"`
 }
 
+// GetBrokerURL constructs the MQTT broker URL from broker and port
+func (m MQTTConfig) GetBrokerURL() string {
+	return fmt.Sprintf("tcp://%s:%d", m.Broker, m.Port)
+}
+
+type AMQPConfig struct {
+	URL         string `mapstructure:"url" env:"AMQP_BROKER_URL"`
+	Exchange    string `mapstructure:"exchange" env:"AMQP_EXCHANGE"`
+	Queue       string `mapstructure:"queue" env:"AMQP_QUEUE"`
+	RoutingKey  string `mapstructure:"routing_key" env:"AMQP_ROUTING_KEY"`
+	ConsumerTag string `mapstructure:"consumer_tag" env:"AMQP_CONSUMER_TAG"`
+	AutoAck     bool   `mapstructure:"auto_ack" env:"AMQP_AUTO_ACK"`
+	Exclusive   bool   `mapstructure:"exclusive" env:"AMQP_EXCLUSIVE"`
+	NoLocal     bool   `mapstructure:"no_local" env:"AMQP_NO_LOCAL"`
+	NoWait      bool   `mapstructure:"no_wait" env:"AMQP_NO_WAIT"`
+}
 
 type RateLimitConfig struct {
 	Enabled            bool `mapstructure:"enabled" env:"RATE_LIMIT_ENABLED"`
@@ -55,12 +74,21 @@ func New() (Config, error) {
 	// Load config file (medium priority)
 	vp.SetConfigFile("configs/config.yaml")
 	if err := vp.ReadInConfig(); err != nil {
-		log.Printf("Config file not found, using defaults and environment variables")
+		log.Printf("Config file not found, using defaults and environment variables: %v", err)
 	}
 
-	// Load .env file (higher priority)
-	if err := godotenv.Load(".env"); err != nil {
-		log.Printf("No .env file found")
+	// Load .env file (higher priority) - try multiple paths
+	envLoaded := false
+	envPaths := []string{".env", "../.env", "../../.env"}
+	for _, path := range envPaths {
+		if err := godotenv.Load(path); err == nil {
+			log.Printf("Loaded .env file from: %s", path)
+			envLoaded = true
+			break
+		}
+	}
+	if !envLoaded {
+		log.Printf("No .env file found in any of the paths: %v", envPaths)
 	}
 
 	// Enable OS environment variables (highest priority)
@@ -68,7 +96,17 @@ func New() (Config, error) {
 	vp.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	vp.SetEnvPrefix("")
 
-	return config, vp.Unmarshal(&config)
+	// Bind environment variables manually for proper loading
+	bindEnvVars(vp)
+
+	if err := vp.Unmarshal(&config); err != nil {
+		return config, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	// Debug logging for AMQP config
+	log.Printf("AMQP URL from config: %s", config.AMQP.URL)
+	
+	return config, nil
 }
 
 func setDefaults(vp *viper.Viper) {
@@ -80,21 +118,71 @@ func setDefaults(vp *viper.Viper) {
 	vp.SetDefault("server.write_timeout", "30s")
 
 	// MQTT defaults
-	vp.SetDefault("mqtt.broker_url", "tcp://emqx:1883")
+	vp.SetDefault("mqtt.broker", "localhost")
+	vp.SetDefault("mqtt.port", 1883)
 	vp.SetDefault("mqtt.client_id", "broker-bridge-service")
 	vp.SetDefault("mqtt.username", "admin")
 	vp.SetDefault("mqtt.password", "public")
 	vp.SetDefault("mqtt.topics", []string{"transformed/device/location"})
-	vp.SetDefault("mqtt.qos", 1)
+	vp.SetDefault("mqtt.qos", 1) // QoS 1 for guaranteed delivery to broker
 	vp.SetDefault("mqtt.clean_session", true)
 	vp.SetDefault("mqtt.keep_alive", 60)
 	vp.SetDefault("mqtt.connect_timeout", "10s")
 	vp.SetDefault("mqtt.reconnect_delay", "5s")
 
 
+	// AMQP defaults
+	vp.SetDefault("amqp.url", "amqp://guest:guest@localhost:5672/")
+	vp.SetDefault("amqp.exchange", "")
+	vp.SetDefault("amqp.queue", "transformed/device/location")
+	vp.SetDefault("amqp.routing_key", "transformed/device/location")
+	vp.SetDefault("amqp.consumer_tag", "broker-bridge-consumer")
+	vp.SetDefault("amqp.auto_ack", false)
+	vp.SetDefault("amqp.exclusive", false)
+	vp.SetDefault("amqp.no_local", false)
+	vp.SetDefault("amqp.no_wait", false)
+
 	// Rate limit defaults
 	vp.SetDefault("rate_limit.enabled", true)
 	vp.SetDefault("rate_limit.requests_per_minute", 1000)
 	vp.SetDefault("rate_limit.burst_size", 100)
 
+}
+
+func bindEnvVars(vp *viper.Viper) {
+	// Server environment variables
+	vp.BindEnv("server.host", "SERVER_HOST")
+	vp.BindEnv("server.port", "SERVER_PORT")
+	vp.BindEnv("server.log_level", "SERVER_LOG_LEVEL")
+	vp.BindEnv("server.read_timeout", "SERVER_READ_TIMEOUT")
+	vp.BindEnv("server.write_timeout", "SERVER_WRITE_TIMEOUT")
+
+	// MQTT environment variables
+	vp.BindEnv("mqtt.broker", "MQTT_BROKER")
+	vp.BindEnv("mqtt.port", "MQTT_PORT")
+	vp.BindEnv("mqtt.client_id", "MQTT_CLIENT_ID")
+	vp.BindEnv("mqtt.username", "MQTT_USERNAME")
+	vp.BindEnv("mqtt.password", "MQTT_PASSWORD")
+	vp.BindEnv("mqtt.topics", "MQTT_TOPICS")
+	vp.BindEnv("mqtt.qos", "MQTT_QOS")
+	vp.BindEnv("mqtt.clean_session", "MQTT_CLEAN_SESSION")
+	vp.BindEnv("mqtt.keep_alive", "MQTT_KEEP_ALIVE")
+	vp.BindEnv("mqtt.connect_timeout", "MQTT_CONNECT_TIMEOUT")
+	vp.BindEnv("mqtt.reconnect_delay", "MQTT_RECONNECT_DELAY")
+
+	// AMQP environment variables
+	vp.BindEnv("amqp.url", "AMQP_BROKER_URL")
+	vp.BindEnv("amqp.exchange", "AMQP_EXCHANGE")
+	vp.BindEnv("amqp.queue", "AMQP_QUEUE")
+	vp.BindEnv("amqp.routing_key", "AMQP_ROUTING_KEY")
+	vp.BindEnv("amqp.consumer_tag", "AMQP_CONSUMER_TAG")
+	vp.BindEnv("amqp.auto_ack", "AMQP_AUTO_ACK")
+	vp.BindEnv("amqp.exclusive", "AMQP_EXCLUSIVE")
+	vp.BindEnv("amqp.no_local", "AMQP_NO_LOCAL")
+	vp.BindEnv("amqp.no_wait", "AMQP_NO_WAIT")
+
+	// Rate limit environment variables
+	vp.BindEnv("rate_limit.enabled", "RATE_LIMIT_ENABLED")
+	vp.BindEnv("rate_limit.requests_per_minute", "RATE_LIMIT_REQUESTS_PER_MINUTE")
+	vp.BindEnv("rate_limit.burst_size", "RATE_LIMIT_BURST_SIZE")
 }
