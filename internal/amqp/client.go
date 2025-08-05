@@ -142,6 +142,7 @@ func (c *Client) Start(ctx context.Context) error {
 
 func (c *Client) handleMessage(msg amqp.Delivery) {
 	log.Printf("Received message from AMQP: routing key %s", msg.RoutingKey)
+	log.Printf("AMQP message body: %s", string(msg.Body))
 
 	var locationUpdate models.DeviceLocationUpdate
 	if err := json.Unmarshal(msg.Body, &locationUpdate); err != nil {

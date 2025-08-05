@@ -46,6 +46,7 @@ type ConnectionInfo struct {
 
 // DeviceLocationUpdate represents real-time location updates
 type DeviceLocationUpdate struct {
+	DeviceID    string    `json:"device_id"`
 	DevEUI      string    `json:"dev_eui"`
 	DeviceName  string    `json:"device_name,omitempty"`
 	Latitude    float64   `json:"latitude"`
