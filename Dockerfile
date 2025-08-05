@@ -17,7 +17,7 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o bin/gateway cmd/gateway/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o bin/bridge cmd/bridge/main.go
 
 # Final stage
 FROM alpine:latest
@@ -26,22 +26,22 @@ FROM alpine:latest
 RUN apk --no-cache add ca-certificates tzdata
 
 # Create non-root user
-RUN adduser -D -s /bin/sh gateway
+RUN adduser -D -s /bin/sh bridge
 
 # Set working directory
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/bin/gateway .
+COPY --from=builder /app/bin/bridge .
 
 # Copy config files
 COPY --from=builder /app/configs ./configs
 
 # Create logs directory
-RUN mkdir -p logs && chown gateway:gateway logs
+RUN mkdir -p logs && chown bridge:bridge logs
 
 # Switch to non-root user
-USER gateway
+USER bridge
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
@@ -51,4 +51,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 EXPOSE 8080
 
 # Run the application
-CMD ["./gateway", "serve"]
+CMD ["./bridge", "serve"]
