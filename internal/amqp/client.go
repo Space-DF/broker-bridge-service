@@ -164,13 +164,13 @@ func (c *Client) handleMessage(msg amqp.Delivery) {
 	select {
 	case c.messagesChan <- messageWithDelivery:
 		log.Printf("Location update queued for device: %s (channel length after: %d/%d)", 
-			locationUpdate.DevEUI, len(c.messagesChan), cap(c.messagesChan))
+			locationUpdate.DeviceEUI, len(c.messagesChan), cap(c.messagesChan))
 		// Do not ACK here - ACK will be handled after successful MQTT publish
 	default:
 		log.Printf("DEBUG: Message channel full! Current length: %d, capacity: %d", 
 			len(c.messagesChan), cap(c.messagesChan))
 		log.Printf("DEBUG: Channel is at 100%% capacity - consumer may be too slow or blocked")
-		log.Printf("Message channel full, dropping location update for device: %s", locationUpdate.DevEUI)
+		log.Printf("Message channel full, dropping location update for device: %s", locationUpdate.DeviceEUI)
 		if !c.config.AutoAck {
 			msg.Nack(false, true)
 		}

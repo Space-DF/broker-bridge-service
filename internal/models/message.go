@@ -44,16 +44,23 @@ type ConnectionInfo struct {
 	ConnectedAt  int64  `json:"connected_at"`
 }
 
+// Location represents location data
+type Location struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	Accuracy  string  `json:"accuracy,omitempty"`
+}
+
 // DeviceLocationUpdate represents real-time location updates
 type DeviceLocationUpdate struct {
-	DeviceID    string    `json:"device_id"`
-	DevEUI      string    `json:"dev_eui"`
-	DeviceName  string    `json:"device_name,omitempty"`
-	Latitude    float64   `json:"latitude"`
-	Longitude   float64   `json:"longitude"`
-	Accuracy    string    `json:"accuracy,omitempty"`
-	Timestamp   time.Time `json:"timestamp"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	DeviceEUI    string                 `json:"device_eui"`
+	DeviceID     string                 `json:"device_id"`
+	Location     Location               `json:"location"`
+	Timestamp    time.Time              `json:"timestamp"`
+	Organization string                 `json:"organization,omitempty"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	Source       string                 `json:"source,omitempty"`
+	UpdatedAt    time.Time              `json:"updated_at"`
 }
 
 // AMQPMessageWithDelivery combines location update with AMQP delivery info for reliable processing
