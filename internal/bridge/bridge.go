@@ -41,10 +41,14 @@ func (b *Bridge) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Create error channel to capture startup errors
+	errorChan := make(chan error, 2)
+
 	// Start MQTT client
 	go func() {
 		if err := b.mqttClient.Start(ctx); err != nil {
 			log.Printf("MQTT client error: %v", err)
+			errorChan <- err
 			close(b.done)
 			return
 		}
@@ -54,11 +58,13 @@ func (b *Bridge) Start(ctx context.Context) error {
 	go func() {
 		if err := b.amqpClient.Start(ctx); err != nil {
 			log.Printf("AMQP client error: %v", err)
+			errorChan <- err
 			close(b.done)
+			return
 		}
 	}()
 
-	// Start message processing from AMQP to MQTT																																												
+	// Start message processing from AMQP to MQTT
 	go b.processAMQPMessages(ctx)
 
 	// Start message processing from MQTT (if needed)
@@ -68,15 +74,18 @@ func (b *Bridge) Start(ctx context.Context) error {
 	log.Printf("- MQTT connected to: %s:%d", b.config.MQTT.Broker, b.config.MQTT.Port)
 	log.Printf("- AMQP connected to: %s", b.config.AMQP.URL)
 
-	// Wait for context cancellation or done signal
+	// Wait for context cancellation, done signal, or startup error
 	select {
 	case <-ctx.Done():
 		log.Println("Context cancelled, stopping bridge")
+		return ctx.Err()
 	case <-b.done:
 		log.Println("Bridge stopped")
+		return nil
+	case err := <-errorChan:
+		log.Printf("Bridge startup failed: %v", err)
+		return err
 	}
-
-	return nil
 }
 
 // Stop gracefully stops the bridge service
