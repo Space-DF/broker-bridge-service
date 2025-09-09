@@ -4,16 +4,16 @@ import (
 	"context"
 	"log"
 
+	"github.com/Space-DF/broker-bridge-service/internal/amqp"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"github.com/Space-DF/broker-bridge-service/internal/mqtt"
-	"github.com/Space-DF/broker-bridge-service/internal/amqp"
 )
 
 // Bridge connects AMQP (RabbitMQ) and MQTT (EMQX) brokers
 type Bridge struct {
 	config        config.Config
 	mqttClient    *mqtt.Client
-	amqpClient *amqp.Client
+	amqpClient    *amqp.Client
 	done          chan bool
 }
 
@@ -42,12 +42,20 @@ func (b *Bridge) Start(ctx context.Context) error {
 	}
 
 	// Start MQTT client
-	go b.mqttClient.Start(ctx)
+	go func() {
+		if err := b.mqttClient.Start(ctx); err != nil {
+			log.Printf("MQTT client error: %v", err)
+		}
+	}()
 
 	// Start AMQP client
-	go b.amqpClient.Start(ctx)
+	go func() {
+		if err := b.amqpClient.Start(ctx); err != nil {
+			log.Printf("AMQP client error: %v", err)
+		}
+	}()
 
-	// Start message processing from AMQP to MQTT
+	// Start message processing from AMQP to 																																																
 	go b.processAMQPMessages(ctx)
 
 	// Start message processing from MQTT (if needed)
@@ -122,11 +130,11 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 			if err := b.mqttClient.PublishDeviceTelemetry(deviceID, locationUpdate); err != nil {
 				log.Printf("Failed to publish device telemetry for %s: %v", deviceID, err)
 				// NACK the message to requeue it
-				b.amqpClient.NackMessage(delivery, true)
+				_ = b.amqpClient.NackMessage(delivery, true)
 			} else {
 				log.Printf("Successfully published telemetry for device %s to MQTT topic device/%s/telemetry", deviceID, deviceID)
 				// ACK the message only after successful MQTT publish
-				b.amqpClient.AckMessage(delivery)
+				_ = b.amqpClient.AckMessage(delivery)
 			}
 		}
 	}

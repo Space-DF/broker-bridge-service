@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spf13/cobra"
-	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"github.com/Space-DF/broker-bridge-service/internal/bridge"
+	"github.com/Space-DF/broker-bridge-service/internal/config"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -133,6 +133,6 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 		"timestamp": "` + time.Now().Format(time.RFC3339) + `"
 	}`
 	
-	w.Write([]byte(response))
+	_, _ = w.Write([]byte(response))
 }
 

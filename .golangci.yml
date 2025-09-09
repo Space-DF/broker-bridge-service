@@ -1,0 +1,11 @@
+version: "2"
+linters:
+  settings:
+    staticcheck:
+      checks:
+        - "-ST1005"
+  exclusions:
+    rules:
+      - source: "^\\s*defer\\s+"
+        linters:
+          - errcheck

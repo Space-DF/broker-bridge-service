@@ -7,9 +7,9 @@ import (
 	"log"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"github.com/Space-DF/broker-bridge-service/internal/models"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type Client struct {
@@ -17,14 +17,6 @@ type Client struct {
 	connection   *amqp.Connection
 	channel      *amqp.Channel
 	messagesChan chan *models.AMQPMessageWithDelivery
-	done         chan bool
-}
-
-type Consumer struct {
-	config       config.AMQPConfig
-	conn         *amqp.Connection
-	channel      *amqp.Channel
-	messagesChan chan *models.DeviceLocationUpdate
 	done         chan bool
 }
 
@@ -148,7 +140,7 @@ func (c *Client) handleMessage(msg amqp.Delivery) {
 	if err := json.Unmarshal(msg.Body, &locationUpdate); err != nil {
 		log.Printf("Error unmarshaling message: %v", err)
 		if !c.config.AutoAck {
-			msg.Nack(false, false)
+			_ = msg.Nack(false, false)
 		}
 		return
 	}
@@ -172,7 +164,7 @@ func (c *Client) handleMessage(msg amqp.Delivery) {
 		log.Printf("DEBUG: Channel is at 100%% capacity - consumer may be too slow or blocked")
 		log.Printf("Message channel full, dropping location update for device: %s", locationUpdate.DeviceEUI)
 		if !c.config.AutoAck {
-			msg.Nack(false, true)
+			_ = msg.Nack(false, true)
 		}
 	}
 }
@@ -212,11 +204,11 @@ func (c *Client) Stop() error {
 		if err := c.channel.Cancel(c.config.ConsumerTag, true); err != nil {
 			log.Printf("Error cancelling consumer: %v", err)
 		}
-		c.channel.Close()
+		_ = c.channel.Close()
 	}
 
 	if c.connection != nil {
-		c.connection.Close()
+		_ = c.connection.Close()
 	}
 
 	close(c.messagesChan)
