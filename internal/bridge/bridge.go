@@ -58,7 +58,7 @@ func (b *Bridge) Start(ctx context.Context) error {
 		}
 	}()
 
-	// Start message processing from AMQP to 																																																
+	// Start message processing from AMQP to MQTT																																												
 	go b.processAMQPMessages(ctx)
 
 	// Start message processing from MQTT (if needed)
