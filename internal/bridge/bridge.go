@@ -45,6 +45,8 @@ func (b *Bridge) Start(ctx context.Context) error {
 	go func() {
 		if err := b.mqttClient.Start(ctx); err != nil {
 			log.Printf("MQTT client error: %v", err)
+			close(b.done)
+			return
 		}
 	}()
 
@@ -52,6 +54,7 @@ func (b *Bridge) Start(ctx context.Context) error {
 	go func() {
 		if err := b.amqpClient.Start(ctx); err != nil {
 			log.Printf("AMQP client error: %v", err)
+			close(b.done)
 		}
 	}()
 
