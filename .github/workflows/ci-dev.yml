@@ -40,7 +40,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
-      - run: go version
 
       - name: Build binary
         run: go build -v ./cmd/bridge
