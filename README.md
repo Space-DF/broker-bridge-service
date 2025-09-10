@@ -39,3 +39,23 @@ make docker-run
 # Run with Docker network (connect to existing EMQX)
 make docker-run-network
 ```
+
+## Testing
+
+### Unit Tests
+```bash
+make test
+```
+
+### Local Linting & Security Checks
+- Tooling (once):
+  ```bash
+  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.4.0
+  go install github.com/securego/gosec/v2/cmd/gosec@master
+  ```
+- Broker Bridge service:
+  ```bash
+  cd broker-bridge-service (optional)
+  golangci-lint run
+  gosec ./...
+  ```
