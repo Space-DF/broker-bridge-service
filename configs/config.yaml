@@ -14,7 +14,7 @@ mqtt:
   username: "admin"
   password: "public"
   topics:
-    - "transformed/device/location"
+    - "tenant/+/transformed/device/location"
     - "device/+/status"
   qos: 1
   clean_session: true
@@ -25,9 +25,9 @@ mqtt:
 # AMQP Configuration
 amqp:
   url: "amqp://guest:guest@localhost:5672/"
-  exchange: ""
+  exchange: "amq.topic"
   queue: "transformed/device/location"
-  routing_key: "transformed/device/location"
+  routing_key: "tenant.*.transformed.device.location"
   consumer_tag: "broker-bridge-consumer"
   auto_ack: false
   exclusive: false
