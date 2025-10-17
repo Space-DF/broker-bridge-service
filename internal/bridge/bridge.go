@@ -20,10 +20,10 @@ type Bridge struct {
 // NewBridge creates a new bridge instance
 func NewBridge(cfg config.Config) *Bridge {
 	return &Bridge{
-		config:         cfg,
-		mqttClient:     mqtt.NewClient(cfg.MQTT),
-		amqpClient: amqp.NewClient(cfg.AMQP),
-		done:           make(chan bool),
+		config:     cfg,
+		mqttClient: mqtt.NewClient(cfg.MQTT),
+		amqpClient: amqp.NewClient(cfg.AMQP, cfg.OrgEvents),
+		done:       make(chan bool),
 	}
 }
 

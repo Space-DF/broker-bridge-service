@@ -14,7 +14,7 @@ mqtt:
   username: "admin"
   password: "public"
   topics:
-    - "transformed/device/location"
+    - "tenant/+/transformed/device/location"
     - "device/+/status"
   qos: 1
   clean_session: true
@@ -25,14 +25,17 @@ mqtt:
 # AMQP Configuration
 amqp:
   url: "amqp://guest:guest@localhost:5672/"
-  exchange: ""
-  queue: "transformed/device/location"
-  routing_key: "transformed/device/location"
-  consumer_tag: "broker-bridge-consumer"
   auto_ack: false
   exclusive: false
   no_local: false
   no_wait: false
+
+# Organization Events Configuration
+org_events:
+  exchange: "org.events"
+  queue: "broker-bridge.org.events.queue"
+  routing_key: "org.#"
+  consumer_tag: "broker-bridge-org-events"
 
 # Rate Limiting Configuration
 rate_limit:
