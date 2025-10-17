@@ -20,10 +20,10 @@ type Bridge struct {
 // NewBridge creates a new bridge instance
 func NewBridge(cfg config.Config) *Bridge {
 	return &Bridge{
-		config:         cfg,
-		mqttClient:     mqtt.NewClient(cfg.MQTT),
-		amqpClient: amqp.NewClient(cfg.AMQP),
-		done:           make(chan bool),
+		config:     cfg,
+		mqttClient: mqtt.NewClient(cfg.MQTT),
+		amqpClient: amqp.NewClient(cfg.AMQP, cfg.OrgEvents),
+		done:       make(chan bool),
 	}
 }
 
@@ -125,6 +125,7 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 			log.Println("AMQP message processing stopped")
 			return
 		case messageWithDelivery, ok := <-messagesChan:
+			log.Printf("Received AMQP message - LocationUpdate: %+v", *messageWithDelivery.LocationUpdate)
 			if !ok {
 				log.Println("AMQP messages channel closed")
 				return
@@ -143,9 +144,11 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 				log.Printf("Failed to publish device telemetry for %s: %v", deviceID, err)
 				// NACK the message to requeue it
 				_ = b.amqpClient.NackMessage(delivery, true)
+				_ = b.amqpClient.NackMessage(delivery, true)
 			} else {
 				log.Printf("Successfully published telemetry for device %s to MQTT topic device/%s/telemetry", deviceID, deviceID)
 				// ACK the message only after successful MQTT publish
+				_ = b.amqpClient.AckMessage(delivery)
 				_ = b.amqpClient.AckMessage(delivery)
 			}
 		}

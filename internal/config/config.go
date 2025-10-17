@@ -13,7 +13,8 @@ import (
 type Config struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	MQTT      MQTTConfig      `mapstructure:"mqtt"`
-	AMQP  AMQPConfig  `mapstructure:"amqp"`
+	AMQP      AMQPConfig      `mapstructure:"amqp"`
+	OrgEvents OrgEventsConfig `mapstructure:"org_events"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 }
 
@@ -54,6 +55,13 @@ type AMQPConfig struct {
 	Exclusive   bool   `mapstructure:"exclusive" env:"AMQP_EXCLUSIVE"`
 	NoLocal     bool   `mapstructure:"no_local" env:"AMQP_NO_LOCAL"`
 	NoWait      bool   `mapstructure:"no_wait" env:"AMQP_NO_WAIT"`
+}
+
+type OrgEventsConfig struct {
+    Exchange    string `mapstructure:"exchange" env:"ORG_EVENTS_EXCHANGE"`
+    Queue       string `mapstructure:"queue" env:"ORG_EVENTS_QUEUE"`
+    RoutingKey  string `mapstructure:"routing_key" env:"ORG_EVENTS_ROUTING_KEY"`
+    ConsumerTag string `mapstructure:"consumer_tag" env:"ORG_EVENTS_CONSUMER_TAG"`
 }
 
 type RateLimitConfig struct {
@@ -133,25 +141,26 @@ func setDefaults(vp *viper.Viper) {
 
 	// AMQP defaults
 	vp.SetDefault("amqp.url", "amqp://guest:guest@localhost:5672/")
-	vp.SetDefault("amqp.exchange", "")
-	vp.SetDefault("amqp.queue", "transformed/device/location")
-	vp.SetDefault("amqp.routing_key", "transformed/device/location")
-	vp.SetDefault("amqp.consumer_tag", "broker-bridge-consumer")
 	vp.SetDefault("amqp.auto_ack", false)
 	vp.SetDefault("amqp.exclusive", false)
 	vp.SetDefault("amqp.no_local", false)
 	vp.SetDefault("amqp.no_wait", false)
 
+	// Org events defaults
+	vp.SetDefault("org_events.exchange", "org.events")
+	vp.SetDefault("org_events.queue", "broker-bridge.org.events.queue")
+	vp.SetDefault("org_events.routing_key", "org.#")
+	vp.SetDefault("org_events.consumer_tag", "broker-bridge-org-events")
+
 	// Rate limit defaults
 	vp.SetDefault("rate_limit.enabled", true)
 	vp.SetDefault("rate_limit.requests_per_minute", 1000)
 	vp.SetDefault("rate_limit.burst_size", 100)
-
 }
 
 func bindEnvVars(vp *viper.Viper) {
 	// Server environment variables
-	_ = vp.BindEnv("server.host", "SERVER_HOST")
+  _ = vp.BindEnv("server.host", "SERVER_HOST")
 	_ = vp.BindEnv("server.port", "SERVER_PORT")
 	_ = vp.BindEnv("server.log_level", "SERVER_LOG_LEVEL")
 	_ = vp.BindEnv("server.read_timeout", "SERVER_READ_TIMEOUT")
@@ -180,6 +189,18 @@ func bindEnvVars(vp *viper.Viper) {
 	_ = vp.BindEnv("amqp.exclusive", "AMQP_EXCLUSIVE")
 	_ = vp.BindEnv("amqp.no_local", "AMQP_NO_LOCAL")
 	_ = vp.BindEnv("amqp.no_wait", "AMQP_NO_WAIT")
+
+	// Org events environment variables
+	_ = vp.BindEnv("org_events.exchange", "ORG_EVENTS_EXCHANGE")
+	_ = vp.BindEnv("org_events.queue", "ORG_EVENTS_QUEUE")
+	_ = vp.BindEnv("org_events.routing_key", "ORG_EVENTS_ROUTING_KEY")
+	_ = vp.BindEnv("org_events.consumer_tag", "ORG_EVENTS_CONSUMER_TAG")
+
+	// Org events defaults
+	vp.SetDefault("org_events.exchange", "org.events")
+	vp.SetDefault("org_events.queue", "transformer.org.events.queue")
+	vp.SetDefault("org_events.routing_key", "org.#")
+	vp.SetDefault("org_events.consumer_tag", "transformer-org-events")
 
 	// Rate limit environment variables
 	_ = vp.BindEnv("rate_limit.enabled", "RATE_LIMIT_ENABLED")
