@@ -23,7 +23,7 @@ type TenantConsumer struct {
 }
 
 type Client struct {
-  config            config.AMQPConfig
+	config            config.AMQPConfig
 	orgEventsConfig   config.OrgEventsConfig
 	connection        *amqp.Connection
 	channel           *amqp.Channel
@@ -46,7 +46,7 @@ func NewClient(cfg config.AMQPConfig, orgEventsCfg config.OrgEventsConfig) *Clie
 
 func (c *Client) Connect() error {
 	var err error
-	
+
 	c.connection, err = amqp.Dial(c.config.URL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to AMQP: %w", err)
@@ -64,7 +64,7 @@ func (c *Client) Connect() error {
 	}
 
 	log.Printf("Successfully connected to AMQP at %s", c.config.URL)
-	
+
 	return nil
 }
 
@@ -118,11 +118,11 @@ func (c *Client) handleMessage(msg amqp.Delivery) {
 
 	select {
 	case c.messagesChan <- messageWithDelivery:
-		log.Printf("Location update queued for device: %s (channel length after: %d/%d)", 
+		log.Printf("Location update queued for device: %s (channel length after: %d/%d)",
 			locationUpdate.DeviceEUI, len(c.messagesChan), cap(c.messagesChan))
 		// Do not ACK here - ACK will be handled after successful MQTT publish
 	default:
-		log.Printf("DEBUG: Message channel full! Current length: %d, capacity: %d", 
+		log.Printf("DEBUG: Message channel full! Current length: %d, capacity: %d",
 			len(c.messagesChan), cap(c.messagesChan))
 		log.Printf("DEBUG: Channel is at 100%% capacity - consumer may be too slow or blocked")
 		log.Printf("Message channel full, dropping location update for device: %s", locationUpdate.DeviceEUI)
@@ -177,7 +177,7 @@ func (c *Client) sendDiscoveryRequest(ctx context.Context) error {
 
 	err = c.orgEventsChannel.PublishWithContext(
 		ctx,
-		c.orgEventsConfig.Exchange,    // "org.events"
+		c.orgEventsConfig.Exchange,     // "org.events"
 		string(models.OrgDiscoveryReq), // "org.discovery.request"
 		false,
 		false,
@@ -195,63 +195,85 @@ func (c *Client) sendDiscoveryRequest(ctx context.Context) error {
 	return nil
 }
 
+func (c *Client) ensureOrgEventsTopology() error {
+	if err := c.orgEventsChannel.ExchangeDeclare(
+		c.orgEventsConfig.Exchange,
+		"topic",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		return fmt.Errorf("exchange declare failed: %w", err)
+	}
+
+	if _, err := c.orgEventsChannel.QueueDeclare(
+		c.orgEventsConfig.Queue,
+		true,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		return fmt.Errorf("queue declare failed: %w", err)
+	}
+
+	if err := c.orgEventsChannel.QueueBind(
+		c.orgEventsConfig.Queue,
+		c.orgEventsConfig.RoutingKey,
+		c.orgEventsConfig.Exchange,
+		false,
+		nil,
+	); err != nil {
+		return fmt.Errorf("queue bind failed: %w", err)
+	}
+
+	return nil
+}
+
 // listenToOrgEvents listens for organization lifecycle events
 func (c *Client) listenToOrgEvents(ctx context.Context) error {
 	log.Println("Setting up organization events listener...")
 
-	// Declare the org.events exchange
-	err := c.orgEventsChannel.ExchangeDeclare(
-		c.orgEventsConfig.Exchange, // "org.events"
-		"topic",
-		true,  // durable
-		false, // auto-deleted
-		false, // internal
-		false, // no-wait
-		nil,
+	var (
+		messages <-chan amqp.Delivery
+		err      error
+		attempt  = 1
 	)
-	if err != nil {
-		return fmt.Errorf("failed to declare org events exchange: %w", err)
-	}
 
-	// Declare queue for org events
-	orgQueue, err := c.orgEventsChannel.QueueDeclare(
-		c.orgEventsConfig.Queue, // "broker-bridge.org.events.queue"
-		true,                    // durable
-		false,                   // delete when unused
-		false,                   // exclusive
-		false,                   // no-wait
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to declare org events queue: %w", err)
-	}
+	for {
+		if err = c.ensureOrgEventsTopology(); err == nil {
+			messages, err = c.orgEventsChannel.Consume(
+				c.orgEventsConfig.Queue,
+				c.orgEventsConfig.ConsumerTag,
+				false, // manual ack for reliability
+				false,
+				false,
+				false,
+				nil,
+			)
+			if err == nil {
+				break
+			}
+		}
 
-	// Bind to org events
-	err = c.orgEventsChannel.QueueBind(
-		orgQueue.Name,
-		c.orgEventsConfig.RoutingKey, // "org.#"
-		c.orgEventsConfig.Exchange,
-		false,
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to bind org events queue: %w", err)
-	}
+		backoff := time.Duration(attempt)
+		if backoff > 10 {
+			backoff = 10
+		}
 
-	log.Printf("Listening for org events on: %s", orgQueue.Name)
+		log.Printf("Broker-bridge org events setup retry (attempt %d, next in %ds): %v", attempt, int(backoff), err)
 
-	// Start consuming org events
-	messages, err := c.orgEventsChannel.Consume(
-		orgQueue.Name,
-		c.orgEventsConfig.ConsumerTag,
-		false, // manual ack for reliability
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to consume org events: %w", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff * time.Second):
+		}
+
+		if attempt < 10 {
+			attempt++
+		}
 	}
 
 	// Process org events
@@ -281,28 +303,28 @@ func (c *Client) handleOrgEvent(ctx context.Context, msg amqp.Delivery) error {
 	log.Printf("Received org event with routing key: %s", msg.RoutingKey)
 
 	// Handle discovery response (contains all active orgs)
-	if msg.RoutingKey == "org.discovery.response" {
-		var response models.OrgDiscoveryResponse
-		if err := json.Unmarshal(msg.Body, &response); err != nil {
-			return fmt.Errorf("failed to unmarshal discovery response: %w", err)
-		}
+	// if msg.RoutingKey == "org.discovery.response" {
+	// 	var response models.OrgDiscoveryResponse
+	// 	if err := json.Unmarshal(msg.Body, &response); err != nil {
+	// 		return fmt.Errorf("failed to unmarshal discovery response: %w", err)
+	// 	}
 
-		log.Printf("Received discovery response with %d active organizations", response.TotalCount)
+	// 	log.Printf("Received discovery response with %d active organizations", response.TotalCount)
 
-		// Subscribe to each active organization
-		for _, org := range response.Organizations {
-			if org.IsActive {
-				log.Printf("Bootstrapping subscription for org: %s", org.Slug)
-				if err := c.subscribeToOrganization(ctx, org.Slug); err != nil {
-					log.Printf("Failed to subscribe to org '%s': %v", org.Slug, err)
-					continue
-				}
-			}
-		}
+	// 	// Subscribe to each active organization
+	// 	for _, org := range response.Organizations {
+	// 		if org.IsActive {
+	// 			log.Printf("Bootstrapping subscription for org: %s", org.Slug)
+	// 			if err := c.subscribeToOrganization(ctx, org.Slug); err != nil {
+	// 				log.Printf("Failed to subscribe to org '%s': %v", org.Slug, err)
+	// 				continue
+	// 			}
+	// 		}
+	// 	}
 
-		log.Printf("Bootstrap complete: subscribed to %d organizations", response.TotalCount)
-		return nil
-	}
+	// 	log.Printf("Bootstrap complete: subscribed to %d organizations", response.TotalCount)
+	// 	return nil
+	// }
 
 	// Handle regular org lifecycle events
 	var event models.OrgEvent
@@ -311,17 +333,17 @@ func (c *Client) handleOrgEvent(ctx context.Context, msg amqp.Delivery) error {
 		return fmt.Errorf("failed to unmarshal org event: %w", err)
 	}
 
-	log.Printf("Processing org event: %s for org: %s", event.EventType, event.Organization.Slug)
+	log.Printf("Processing org event: %s for org: %s", event.EventType, event.Payload.Slug)
 
 	switch event.EventType {
 
 	case models.OrgCreated:
 		// New org created - subscribe to its queue
-		return c.subscribeToOrganization(ctx, event.Organization.Slug)
+		return c.subscribeToOrganization(ctx, event.Payload.Slug)
 
 	case models.OrgDeactivated, models.OrgDeleted:
 		// Org deleted/deactivated - unsubscribe
-		c.unsubscribeFromOrganization(event.Organization.Slug)
+		c.unsubscribeFromOrganization(event.Payload.Slug)
 		return nil
 
 	default:
@@ -349,42 +371,15 @@ func (c *Client) subscribeToOrganization(ctx context.Context, orgSlug string) er
 		return fmt.Errorf("failed to create channel for org %s: %w", orgSlug, err)
 	}
 
-	// Declare queue for this tenant
-	queueName := fmt.Sprintf("%s.transformed.data.queue", orgSlug)
-	queue, err := tenantChannel.QueueDeclare(
-		queueName,
-		true,  // durable
-		false, // delete when unused
-		false, // exclusive
-		false, // no-wait
-		nil,
-	)
-	if err != nil {
-		_ = tenantChannel.Close()
-		return fmt.Errorf("failed to declare queue for org %s: %w", orgSlug, err)
-	}
-
-	// Bind queue to exchange
-	routingKey := fmt.Sprintf("tenant.%s.transformed.device.location", orgSlug)
-	err = tenantChannel.QueueBind(
-		queue.Name,
-		routingKey,
-		fmt.Sprintf("%s.exchange", orgSlug),
-		false,
-		nil,
-	)
-	if err != nil {
-		_ = tenantChannel.Close()
-		return fmt.Errorf("failed to bind queue for org %s: %w", orgSlug, err)
-	}
-
+	// Declare consumer tag for this tenant
 	consumerTag := fmt.Sprintf("%s-broker-bridge-%d", orgSlug, time.Now().Unix())
+	queueName := fmt.Sprintf("%s.transformed.data.queue", orgSlug)
 
 	// Start consuming messages
 	messages, err := tenantChannel.Consume(
-		queue.Name,
+		queueName,
 		consumerTag, // consumer tag
-		false, // manual ack
+		false,       // manual ack
 		false,
 		false,
 		false,
@@ -401,7 +396,7 @@ func (c *Client) subscribeToOrganization(ctx context.Context, orgSlug string) er
 	// Store tenant consumer info
 	tenantConsumer := &TenantConsumer{
 		OrgSlug:   orgSlug,
-		QueueName: queue.Name,
+		QueueName: queueName,
 		Channel:   tenantChannel,
 		Cancel:    cancel,
 	}
@@ -414,7 +409,7 @@ func (c *Client) subscribeToOrganization(ctx context.Context, orgSlug string) er
 		c.processTenantMessages(tenantCtx, orgSlug, messages)
 	}()
 
-	log.Printf("Successfully subscribed to org: %s (queue: %s)", orgSlug, queue.Name)
+	log.Printf("Successfully subscribed to org: %s (queue: %s)", orgSlug, queueName)
 	return nil
 }
 
@@ -472,7 +467,7 @@ func (c *Client) processTenantMessages(ctx context.Context, orgSlug string, mess
 
 func (c *Client) Stop() error {
 	log.Println("Stopping AMQP client")
-	
+
 	close(c.done)
 
 	if c.channel != nil {

@@ -27,17 +27,17 @@ type ServerConfig struct {
 }
 
 type MQTTConfig struct {
-	Broker          string        `mapstructure:"broker" env:"MQTT_BROKER"`
-	Port            int           `mapstructure:"port" env:"MQTT_PORT"`
-	ClientID        string        `mapstructure:"client_id" env:"MQTT_CLIENT_ID"`
-	Username        string        `mapstructure:"username" env:"MQTT_USERNAME"`
-	Password        string        `mapstructure:"password" env:"MQTT_PASSWORD"`
-	Topics          []string      `mapstructure:"topics" env:"MQTT_TOPICS"`
-	QoS             byte          `mapstructure:"qos" env:"MQTT_QOS"`
-	CleanSession    bool          `mapstructure:"clean_session" env:"MQTT_CLEAN_SESSION"`
-	KeepAlive       int           `mapstructure:"keep_alive" env:"MQTT_KEEP_ALIVE"`
-	ConnectTimeout  time.Duration `mapstructure:"connect_timeout" env:"MQTT_CONNECT_TIMEOUT"`
-	ReconnectDelay  time.Duration `mapstructure:"reconnect_delay" env:"MQTT_RECONNECT_DELAY"`
+	Broker         string        `mapstructure:"broker" env:"MQTT_BROKER"`
+	Port           int           `mapstructure:"port" env:"MQTT_PORT"`
+	ClientID       string        `mapstructure:"client_id" env:"MQTT_CLIENT_ID"`
+	Username       string        `mapstructure:"username" env:"MQTT_USERNAME"`
+	Password       string        `mapstructure:"password" env:"MQTT_PASSWORD"`
+	Topics         []string      `mapstructure:"topics" env:"MQTT_TOPICS"`
+	QoS            byte          `mapstructure:"qos" env:"MQTT_QOS"`
+	CleanSession   bool          `mapstructure:"clean_session" env:"MQTT_CLEAN_SESSION"`
+	KeepAlive      int           `mapstructure:"keep_alive" env:"MQTT_KEEP_ALIVE"`
+	ConnectTimeout time.Duration `mapstructure:"connect_timeout" env:"MQTT_CONNECT_TIMEOUT"`
+	ReconnectDelay time.Duration `mapstructure:"reconnect_delay" env:"MQTT_RECONNECT_DELAY"`
 }
 
 // GetBrokerURL constructs the MQTT broker URL from broker and port
@@ -58,18 +58,17 @@ type AMQPConfig struct {
 }
 
 type OrgEventsConfig struct {
-    Exchange    string `mapstructure:"exchange" env:"ORG_EVENTS_EXCHANGE"`
-    Queue       string `mapstructure:"queue" env:"ORG_EVENTS_QUEUE"`
-    RoutingKey  string `mapstructure:"routing_key" env:"ORG_EVENTS_ROUTING_KEY"`
-    ConsumerTag string `mapstructure:"consumer_tag" env:"ORG_EVENTS_CONSUMER_TAG"`
+	Exchange    string `mapstructure:"exchange" env:"ORG_EVENTS_EXCHANGE"`
+	Queue       string `mapstructure:"queue" env:"ORG_EVENTS_QUEUE"`
+	RoutingKey  string `mapstructure:"routing_key" env:"ORG_EVENTS_ROUTING_KEY"`
+	ConsumerTag string `mapstructure:"consumer_tag" env:"ORG_EVENTS_CONSUMER_TAG"`
 }
 
 type RateLimitConfig struct {
-	Enabled            bool `mapstructure:"enabled" env:"RATE_LIMIT_ENABLED"`
-	RequestsPerMinute  int  `mapstructure:"requests_per_minute" env:"RATE_LIMIT_REQUESTS_PER_MINUTE"`
-	BurstSize          int  `mapstructure:"burst_size" env:"RATE_LIMIT_BURST_SIZE"`
+	Enabled           bool `mapstructure:"enabled" env:"RATE_LIMIT_ENABLED"`
+	RequestsPerMinute int  `mapstructure:"requests_per_minute" env:"RATE_LIMIT_REQUESTS_PER_MINUTE"`
+	BurstSize         int  `mapstructure:"burst_size" env:"RATE_LIMIT_BURST_SIZE"`
 }
-
 
 func New() (Config, error) {
 	var config Config
@@ -113,7 +112,7 @@ func New() (Config, error) {
 
 	// Debug logging for AMQP config
 	log.Printf("AMQP URL from config: %s", config.AMQP.URL)
-	
+
 	return config, nil
 }
 
@@ -138,7 +137,6 @@ func setDefaults(vp *viper.Viper) {
 	vp.SetDefault("mqtt.connect_timeout", "10s")
 	vp.SetDefault("mqtt.reconnect_delay", "5s")
 
-
 	// AMQP defaults
 	vp.SetDefault("amqp.url", "amqp://guest:guest@localhost:5672/")
 	vp.SetDefault("amqp.auto_ack", false)
@@ -160,7 +158,7 @@ func setDefaults(vp *viper.Viper) {
 
 func bindEnvVars(vp *viper.Viper) {
 	// Server environment variables
-  _ = vp.BindEnv("server.host", "SERVER_HOST")
+	_ = vp.BindEnv("server.host", "SERVER_HOST")
 	_ = vp.BindEnv("server.port", "SERVER_PORT")
 	_ = vp.BindEnv("server.log_level", "SERVER_LOG_LEVEL")
 	_ = vp.BindEnv("server.read_timeout", "SERVER_READ_TIMEOUT")
@@ -198,9 +196,9 @@ func bindEnvVars(vp *viper.Viper) {
 
 	// Org events defaults
 	vp.SetDefault("org_events.exchange", "org.events")
-	vp.SetDefault("org_events.queue", "transformer.org.events.queue")
+	vp.SetDefault("org_events.queue", "broker-bridge.org.events.queue")
 	vp.SetDefault("org_events.routing_key", "org.#")
-	vp.SetDefault("org_events.consumer_tag", "transformer-org-events")
+	vp.SetDefault("org_events.consumer_tag", "broker-bridge-org-events")
 
 	// Rate limit environment variables
 	_ = vp.BindEnv("rate_limit.enabled", "RATE_LIMIT_ENABLED")

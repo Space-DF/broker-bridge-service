@@ -10,7 +10,7 @@ const (
 	OrgUpdated     OrgEventType = "org.updated"
 	OrgDeactivated OrgEventType = "org.deactivated"
 	OrgDeleted     OrgEventType = "org.deleted"
-	
+
 	// Bootstrap/Discovery events (Request-Response pattern)
 	OrgDiscoveryReq  OrgEventType = "org.discovery.request"  // Bridge → Console
 	OrgDiscoveryResp OrgEventType = "org.discovery.response" // Console → Bridge
@@ -18,17 +18,18 @@ const (
 
 // OrgEvent represents an organization lifecycle event
 type OrgEvent struct {
-	EventType    OrgEventType `json:"event_type"`
-	EventID      string       `json:"event_id"`
-	Timestamp    time.Time    `json:"timestamp"`
-	Organization Organization `json:"organization"`
+	EventType OrgEventType `json:"event_type"`
+	EventID   string       `json:"event_id"`
+	Timestamp time.Time    `json:"timestamp"`
+	Payload   Payload      `json:"payload"`
 }
 
 // Organization represents organization data in events
-type Organization struct {
+type Payload struct {
 	ID        string    `json:"id"`
 	Slug      string    `json:"slug"`
 	Name      string    `json:"name"`
+	Vhost     string    `json:"vhost"`
 	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -44,10 +45,10 @@ type OrgDiscoveryRequest struct {
 }
 
 // OrgDiscoveryResponse contains all active organizations
-type OrgDiscoveryResponse struct {
-	EventType     OrgEventType   `json:"event_type"` // "org.discovery.response"
-	EventID       string         `json:"event_id"`
-	Timestamp     time.Time      `json:"timestamp"`
-	Organizations []Organization `json:"organizations"`
-	TotalCount    int            `json:"total_count"`
-}
+// type OrgDiscoveryResponse struct {
+// 	EventType     OrgEventType   `json:"event_type"` // "org.discovery.response"
+// 	EventID       string         `json:"event_id"`
+// 	Timestamp     time.Time      `json:"timestamp"`
+// 	Organizations []Organization `json:"organizations"`
+// 	TotalCount    int            `json:"total_count"`
+// }

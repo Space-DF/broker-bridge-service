@@ -7,9 +7,9 @@ import (
 	"log"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"github.com/Space-DF/broker-bridge-service/internal/models"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 // Client handles MQTT connection to EMQX
