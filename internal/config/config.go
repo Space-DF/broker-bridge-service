@@ -46,15 +46,16 @@ func (m MQTTConfig) GetBrokerURL() string {
 }
 
 type AMQPConfig struct {
-	URL         string `mapstructure:"url" env:"AMQP_BROKER_URL"`
-	Exchange    string `mapstructure:"exchange" env:"AMQP_EXCHANGE"`
-	Queue       string `mapstructure:"queue" env:"AMQP_QUEUE"`
-	RoutingKey  string `mapstructure:"routing_key" env:"AMQP_ROUTING_KEY"`
-	ConsumerTag string `mapstructure:"consumer_tag" env:"AMQP_CONSUMER_TAG"`
-	AutoAck     bool   `mapstructure:"auto_ack" env:"AMQP_AUTO_ACK"`
-	Exclusive   bool   `mapstructure:"exclusive" env:"AMQP_EXCLUSIVE"`
-	NoLocal     bool   `mapstructure:"no_local" env:"AMQP_NO_LOCAL"`
-	NoWait      bool   `mapstructure:"no_wait" env:"AMQP_NO_WAIT"`
+	URL           string   `mapstructure:"url" env:"AMQP_BROKER_URL"`
+	AllowedVhosts []string `mapstructure:"allowed_vhosts" env:"AMQP_ALLOWED_VHOSTS"`
+	Exchange      string   `mapstructure:"exchange" env:"AMQP_EXCHANGE"`
+	Queue         string   `mapstructure:"queue" env:"AMQP_QUEUE"`
+	RoutingKey    string   `mapstructure:"routing_key" env:"AMQP_ROUTING_KEY"`
+	ConsumerTag   string   `mapstructure:"consumer_tag" env:"AMQP_CONSUMER_TAG"`
+	AutoAck       bool     `mapstructure:"auto_ack" env:"AMQP_AUTO_ACK"`
+	Exclusive     bool     `mapstructure:"exclusive" env:"AMQP_EXCLUSIVE"`
+	NoLocal       bool     `mapstructure:"no_local" env:"AMQP_NO_LOCAL"`
+	NoWait        bool     `mapstructure:"no_wait" env:"AMQP_NO_WAIT"`
 }
 
 type OrgEventsConfig struct {
@@ -110,6 +111,10 @@ func New() (Config, error) {
 		return config, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	if raw := vp.GetString("amqp.allowed_vhosts"); raw != "" {
+		config.AMQP.AllowedVhosts = splitAndTrim(raw)
+	}
+
 	// Debug logging for AMQP config
 	log.Printf("AMQP URL from config: %s", config.AMQP.URL)
 
@@ -139,6 +144,7 @@ func setDefaults(vp *viper.Viper) {
 
 	// AMQP defaults
 	vp.SetDefault("amqp.url", "amqp://guest:guest@localhost:5672/")
+	vp.SetDefault("amqp.allowed_vhosts", "")
 	vp.SetDefault("amqp.auto_ack", false)
 	vp.SetDefault("amqp.exclusive", false)
 	vp.SetDefault("amqp.no_local", false)
@@ -179,6 +185,7 @@ func bindEnvVars(vp *viper.Viper) {
 
 	// AMQP environment variables
 	_ = vp.BindEnv("amqp.url", "AMQP_BROKER_URL")
+	_ = vp.BindEnv("amqp.allowed_vhosts", "AMQP_ALLOWED_VHOSTS")
 	_ = vp.BindEnv("amqp.exchange", "AMQP_EXCHANGE")
 	_ = vp.BindEnv("amqp.queue", "AMQP_QUEUE")
 	_ = vp.BindEnv("amqp.routing_key", "AMQP_ROUTING_KEY")
@@ -204,4 +211,15 @@ func bindEnvVars(vp *viper.Viper) {
 	_ = vp.BindEnv("rate_limit.enabled", "RATE_LIMIT_ENABLED")
 	_ = vp.BindEnv("rate_limit.requests_per_minute", "RATE_LIMIT_REQUESTS_PER_MINUTE")
 	_ = vp.BindEnv("rate_limit.burst_size", "RATE_LIMIT_BURST_SIZE")
+}
+
+func splitAndTrim(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }

@@ -26,13 +26,17 @@ type OrgEvent struct {
 
 // Organization represents organization data in events
 type Payload struct {
-	ID        string    `json:"id"`
-	Slug      string    `json:"slug"`
-	Name      string    `json:"name"`
-	Vhost     string    `json:"vhost"`
-	IsActive  bool      `json:"is_active"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	Slug             string    `json:"slug"`
+	Name             string    `json:"name"`
+	Vhost            string    `json:"vhost"`
+	Exchange         string    `json:"exchange"`
+	AMQPURL          string    `json:"amqp_url"`
+	TransformerQueue string    `json:"transformer_queue"`
+	TransformedQueue string    `json:"transformed_queue"`
+	IsActive         bool      `json:"is_active"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // OrgDiscoveryRequest is sent by broker-bridge to request all active orgs
