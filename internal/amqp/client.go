@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,56 +17,60 @@ import (
 
 // TenantConsumer represents a consumer for a specific tenant
 type TenantConsumer struct {
-	OrgSlug   string
-	QueueName string
-	Channel   *amqp.Channel
-	Cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	OrgSlug     string
+	Vhost       string
+	QueueName   string
+	ConsumerTag string
+	Channel     *amqp.Channel
+	Cancel      context.CancelFunc
+	wg          sync.WaitGroup
+}
+
+type pooledConnection struct {
+	conn     *amqp.Connection
+	refCount int
 }
 
 type Client struct {
-  config            config.AMQPConfig
-	orgEventsConfig   config.OrgEventsConfig
-	connection        *amqp.Connection
-	channel           *amqp.Channel
-	orgEventsChannel  *amqp.Channel
-	messagesChan      chan *models.AMQPMessageWithDelivery
-	done              chan bool
-	tenantConsumers   map[string]*TenantConsumer
-	tenantConsumersMu sync.RWMutex
+	config             config.AMQPConfig
+	orgEventsConfig    config.OrgEventsConfig
+	orgEventsConn      *amqp.Connection
+	orgEventsChannel   *amqp.Channel
+	messagesChan       chan *models.AMQPMessageWithDelivery
+	done               chan bool
+	tenantConsumers    map[string]*TenantConsumer
+	tenantConsumersMu  sync.RWMutex
+	vhostConnections   map[string]*pooledConnection
+	vhostConnectionsMu sync.Mutex
 }
 
 func NewClient(cfg config.AMQPConfig, orgEventsCfg config.OrgEventsConfig) *Client {
 	return &Client{
-		config:          cfg,
-		orgEventsConfig: orgEventsCfg,
-		messagesChan:    make(chan *models.AMQPMessageWithDelivery, 100),
-		done:            make(chan bool),
-		tenantConsumers: make(map[string]*TenantConsumer),
+		config:           cfg,
+		orgEventsConfig:  orgEventsCfg,
+		messagesChan:     make(chan *models.AMQPMessageWithDelivery, 100),
+		done:             make(chan bool),
+		tenantConsumers:  make(map[string]*TenantConsumer),
+		vhostConnections: make(map[string]*pooledConnection),
 	}
 }
 
 func (c *Client) Connect() error {
 	var err error
-	
-	c.connection, err = amqp.Dial(c.config.URL)
+
+	c.orgEventsConn, err = amqp.Dial(c.config.URL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to AMQP: %w", err)
 	}
 
-	c.channel, err = c.connection.Channel()
-	if err != nil {
-		return fmt.Errorf("failed to open channel: %w", err)
-	}
-
 	// Create separate channel for org events
-	c.orgEventsChannel, err = c.connection.Channel()
+	c.orgEventsChannel, err = c.orgEventsConn.Channel()
 	if err != nil {
 		return fmt.Errorf("failed to open org events channel: %w", err)
 	}
 
 	log.Printf("Successfully connected to AMQP at %s", c.config.URL)
-	
+
 	return nil
 }
 
@@ -118,11 +124,11 @@ func (c *Client) handleMessage(msg amqp.Delivery) {
 
 	select {
 	case c.messagesChan <- messageWithDelivery:
-		log.Printf("Location update queued for device: %s (channel length after: %d/%d)", 
+		log.Printf("Location update queued for device: %s (channel length after: %d/%d)",
 			locationUpdate.DeviceEUI, len(c.messagesChan), cap(c.messagesChan))
 		// Do not ACK here - ACK will be handled after successful MQTT publish
 	default:
-		log.Printf("DEBUG: Message channel full! Current length: %d, capacity: %d", 
+		log.Printf("DEBUG: Message channel full! Current length: %d, capacity: %d",
 			len(c.messagesChan), cap(c.messagesChan))
 		log.Printf("DEBUG: Channel is at 100%% capacity - consumer may be too slow or blocked")
 		log.Printf("Message channel full, dropping location update for device: %s", locationUpdate.DeviceEUI)
@@ -177,7 +183,7 @@ func (c *Client) sendDiscoveryRequest(ctx context.Context) error {
 
 	err = c.orgEventsChannel.PublishWithContext(
 		ctx,
-		c.orgEventsConfig.Exchange,    // "org.events"
+		c.orgEventsConfig.Exchange,     // "org.events"
 		string(models.OrgDiscoveryReq), // "org.discovery.request"
 		false,
 		false,
@@ -195,63 +201,165 @@ func (c *Client) sendDiscoveryRequest(ctx context.Context) error {
 	return nil
 }
 
+func (c *Client) ensureOrgEventsTopology() error {
+	if err := c.orgEventsChannel.ExchangeDeclare(
+		c.orgEventsConfig.Exchange,
+		"topic",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		return fmt.Errorf("exchange declare failed: %w", err)
+	}
+
+	if _, err := c.orgEventsChannel.QueueDeclare(
+		c.orgEventsConfig.Queue,
+		true,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		return fmt.Errorf("queue declare failed: %w", err)
+	}
+
+	if err := c.orgEventsChannel.QueueBind(
+		c.orgEventsConfig.Queue,
+		c.orgEventsConfig.RoutingKey,
+		c.orgEventsConfig.Exchange,
+		false,
+		nil,
+	); err != nil {
+		return fmt.Errorf("queue bind failed: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Client) shouldHandleVhost(vhost string) bool {
+	if len(c.config.AllowedVhosts) == 0 {
+		return true
+	}
+
+	for _, allowed := range c.config.AllowedVhosts {
+		if allowed == vhost {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) buildVhostURL(vhost string) (string, error) {
+	baseURL := c.config.URL
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse broker url: %w", err)
+	}
+
+	if vhost == "" {
+		parsed.Path = "/"
+		parsed.RawPath = ""
+	} else {
+		encoded := "/" + url.PathEscape(vhost)
+		parsed.Path = encoded
+		parsed.RawPath = encoded
+	}
+
+	return parsed.String(), nil
+}
+
+func (c *Client) getOrCreateVhostConnection(vhost string) (*amqp.Connection, error) {
+	c.vhostConnectionsMu.Lock()
+	defer c.vhostConnectionsMu.Unlock()
+
+	if pooled, exists := c.vhostConnections[vhost]; exists {
+		pooled.refCount++
+		return pooled.conn, nil
+	}
+
+	vhostURL, err := c.buildVhostURL(vhost)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := amqp.Dial(vhostURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to AMQP vhost %s: %w", vhost, err)
+	}
+
+	c.vhostConnections[vhost] = &pooledConnection{
+		conn:     conn,
+		refCount: 1,
+	}
+
+	return conn, nil
+}
+
+func (c *Client) releaseVhostConnection(vhost string) {
+	c.vhostConnectionsMu.Lock()
+	defer c.vhostConnectionsMu.Unlock()
+
+	pooled, exists := c.vhostConnections[vhost]
+	if !exists {
+		return
+	}
+
+	pooled.refCount--
+	if pooled.refCount <= 0 {
+		_ = pooled.conn.Close()
+		delete(c.vhostConnections, vhost)
+	}
+}
+
+func (c *Client) makeConsumerTag(orgSlug, vhost string) string {
+	safeVhost := strings.NewReplacer("/", "_", ".", "_", ":", "_").Replace(vhost)
+	return fmt.Sprintf("%s-broker-bridge-%s-%d", orgSlug, safeVhost, time.Now().UnixNano())
+}
+
 // listenToOrgEvents listens for organization lifecycle events
 func (c *Client) listenToOrgEvents(ctx context.Context) error {
 	log.Println("Setting up organization events listener...")
 
-	// Declare the org.events exchange
-	err := c.orgEventsChannel.ExchangeDeclare(
-		c.orgEventsConfig.Exchange, // "org.events"
-		"topic",
-		true,  // durable
-		false, // auto-deleted
-		false, // internal
-		false, // no-wait
-		nil,
+	var (
+		messages <-chan amqp.Delivery
+		err      error
+		attempt  = 1
 	)
-	if err != nil {
-		return fmt.Errorf("failed to declare org events exchange: %w", err)
-	}
 
-	// Declare queue for org events
-	orgQueue, err := c.orgEventsChannel.QueueDeclare(
-		c.orgEventsConfig.Queue, // "broker-bridge.org.events.queue"
-		true,                    // durable
-		false,                   // delete when unused
-		false,                   // exclusive
-		false,                   // no-wait
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to declare org events queue: %w", err)
-	}
+	for {
+		if err = c.ensureOrgEventsTopology(); err == nil {
+			messages, err = c.orgEventsChannel.Consume(
+				c.orgEventsConfig.Queue,
+				c.orgEventsConfig.ConsumerTag,
+				false, // manual ack for reliability
+				false,
+				false,
+				false,
+				nil,
+			)
+			if err == nil {
+				break
+			}
+		}
 
-	// Bind to org events
-	err = c.orgEventsChannel.QueueBind(
-		orgQueue.Name,
-		c.orgEventsConfig.RoutingKey, // "org.#"
-		c.orgEventsConfig.Exchange,
-		false,
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to bind org events queue: %w", err)
-	}
+		backoff := time.Duration(attempt)
+		if backoff > 10 {
+			backoff = 10
+		}
 
-	log.Printf("Listening for org events on: %s", orgQueue.Name)
+		log.Printf("Broker-bridge org events setup retry (attempt %d, next in %ds): %v", attempt, int(backoff), err)
 
-	// Start consuming org events
-	messages, err := c.orgEventsChannel.Consume(
-		orgQueue.Name,
-		c.orgEventsConfig.ConsumerTag,
-		false, // manual ack for reliability
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to consume org events: %w", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff * time.Second):
+		}
+
+		if attempt < 10 {
+			attempt++
+		}
 	}
 
 	// Process org events
@@ -281,28 +389,28 @@ func (c *Client) handleOrgEvent(ctx context.Context, msg amqp.Delivery) error {
 	log.Printf("Received org event with routing key: %s", msg.RoutingKey)
 
 	// Handle discovery response (contains all active orgs)
-	if msg.RoutingKey == "org.discovery.response" {
-		var response models.OrgDiscoveryResponse
-		if err := json.Unmarshal(msg.Body, &response); err != nil {
-			return fmt.Errorf("failed to unmarshal discovery response: %w", err)
-		}
+	// if msg.RoutingKey == "org.discovery.response" {
+	// 	var response models.OrgDiscoveryResponse
+	// 	if err := json.Unmarshal(msg.Body, &response); err != nil {
+	// 		return fmt.Errorf("failed to unmarshal discovery response: %w", err)
+	// 	}
 
-		log.Printf("Received discovery response with %d active organizations", response.TotalCount)
+	// 	log.Printf("Received discovery response with %d active organizations", response.TotalCount)
 
-		// Subscribe to each active organization
-		for _, org := range response.Organizations {
-			if org.IsActive {
-				log.Printf("Bootstrapping subscription for org: %s", org.Slug)
-				if err := c.subscribeToOrganization(ctx, org.Slug); err != nil {
-					log.Printf("Failed to subscribe to org '%s': %v", org.Slug, err)
-					continue
-				}
-			}
-		}
+	// 	// Subscribe to each active organization
+	// 	for _, org := range response.Organizations {
+	// 		if org.IsActive {
+	// 			log.Printf("Bootstrapping subscription for org: %s", org.Slug)
+	// 			if err := c.subscribeToOrganization(ctx, org.Slug); err != nil {
+	// 				log.Printf("Failed to subscribe to org '%s': %v", org.Slug, err)
+	// 				continue
+	// 			}
+	// 		}
+	// 	}
 
-		log.Printf("Bootstrap complete: subscribed to %d organizations", response.TotalCount)
-		return nil
-	}
+	// 	log.Printf("Bootstrap complete: subscribed to %d organizations", response.TotalCount)
+	// 	return nil
+	// }
 
 	// Handle regular org lifecycle events
 	var event models.OrgEvent
@@ -311,17 +419,29 @@ func (c *Client) handleOrgEvent(ctx context.Context, msg amqp.Delivery) error {
 		return fmt.Errorf("failed to unmarshal org event: %w", err)
 	}
 
-	log.Printf("Processing org event: %s for org: %s", event.EventType, event.Organization.Slug)
+	log.Printf("Processing org event: %s for org: %s", event.EventType, event.Payload.Slug)
+
+	orgSlug := event.Payload.Slug
+	vhost := event.Payload.Vhost
+	queueName := event.Payload.TransformedQueue
+
+	if queueName == "" && orgSlug != "" {
+		queueName = fmt.Sprintf("%s.transformed.data.queue", orgSlug)
+	}
 
 	switch event.EventType {
 
 	case models.OrgCreated:
 		// New org created - subscribe to its queue
-		return c.subscribeToOrganization(ctx, event.Organization.Slug)
+		if vhost == "" {
+			log.Printf("Org created event missing vhost for org: %s", orgSlug)
+			return nil
+		}
+		return c.subscribeToOrganization(ctx, vhost, orgSlug, queueName)
 
 	case models.OrgDeactivated, models.OrgDeleted:
 		// Org deleted/deactivated - unsubscribe
-		c.unsubscribeFromOrganization(event.Organization.Slug)
+		c.unsubscribeFromOrganization(orgSlug)
 		return nil
 
 	default:
@@ -331,60 +451,49 @@ func (c *Client) handleOrgEvent(ctx context.Context, msg amqp.Delivery) error {
 }
 
 // subscribeToOrganization subscribes to a specific organization's queue
-func (c *Client) subscribeToOrganization(ctx context.Context, orgSlug string) error {
-	c.tenantConsumersMu.Lock()
-	defer c.tenantConsumersMu.Unlock()
+func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, queueName string) error {
+	if queueName == "" {
+		queueName = fmt.Sprintf("%s.transformed.data.queue", orgSlug)
+	}
 
-	// Check if already subscribed
-	if _, exists := c.tenantConsumers[orgSlug]; exists {
-		log.Printf("Already subscribed to org: %s", orgSlug)
+	if !c.shouldHandleVhost(vhost) {
+		log.Printf("Skipping subscription for org %s in vhost %s (not assigned to this instance)", orgSlug, vhost)
 		return nil
 	}
 
-	log.Printf("Subscribing to organization: %s", orgSlug)
+	c.tenantConsumersMu.Lock()
+	if _, exists := c.tenantConsumers[orgSlug]; exists {
+		c.tenantConsumersMu.Unlock()
+		log.Printf("Already subscribed to org: %s (vhost: %s)", orgSlug, vhost)
+		return nil
+	}
+	c.tenantConsumersMu.Unlock()
 
-	// Create dedicated channel for this tenant
-	tenantChannel, err := c.connection.Channel()
+	log.Printf("Subscribing to organization: %s (vhost: %s)", orgSlug, vhost)
+
+	conn, err := c.getOrCreateVhostConnection(vhost)
 	if err != nil {
-		return fmt.Errorf("failed to create channel for org %s: %w", orgSlug, err)
+		return err
 	}
 
-	// Declare queue for this tenant
-	queueName := fmt.Sprintf("%s.transformed.data.queue", orgSlug)
-	queue, err := tenantChannel.QueueDeclare(
-		queueName,
-		true,  // durable
-		false, // delete when unused
-		false, // exclusive
-		false, // no-wait
-		nil,
-	)
+	tenantChannel, err := conn.Channel()
 	if err != nil {
+		c.releaseVhostConnection(vhost)
+		return fmt.Errorf("failed to create channel for org %s in vhost %s: %w", orgSlug, vhost, err)
+	}
+
+	if err := tenantChannel.Qos(10, 0, false); err != nil {
 		_ = tenantChannel.Close()
-		return fmt.Errorf("failed to declare queue for org %s: %w", orgSlug, err)
+		c.releaseVhostConnection(vhost)
+		return fmt.Errorf("failed to set QoS for org %s in vhost %s: %w", orgSlug, vhost, err)
 	}
 
-	// Bind queue to exchange
-	routingKey := fmt.Sprintf("tenant.%s.transformed.device.location", orgSlug)
-	err = tenantChannel.QueueBind(
-		queue.Name,
-		routingKey,
-		fmt.Sprintf("%s.exchange", orgSlug),
-		false,
-		nil,
-	)
-	if err != nil {
-		_ = tenantChannel.Close()
-		return fmt.Errorf("failed to bind queue for org %s: %w", orgSlug, err)
-	}
+	consumerTag := c.makeConsumerTag(orgSlug, vhost)
 
-	consumerTag := fmt.Sprintf("%s-broker-bridge-%d", orgSlug, time.Now().Unix())
-
-	// Start consuming messages
 	messages, err := tenantChannel.Consume(
-		queue.Name,
-		consumerTag, // consumer tag
-		false, // manual ack
+		queueName,
+		consumerTag,
+		c.config.AutoAck,
 		false,
 		false,
 		false,
@@ -392,42 +501,47 @@ func (c *Client) subscribeToOrganization(ctx context.Context, orgSlug string) er
 	)
 	if err != nil {
 		_ = tenantChannel.Close()
-		return fmt.Errorf("failed to start consuming for org %s: %w", orgSlug, err)
+		c.releaseVhostConnection(vhost)
+		return fmt.Errorf("failed to start consuming for org %s in vhost %s: %w", orgSlug, vhost, err)
 	}
 
-	// Create cancellable context for this tenant
-	tenantCtx, cancel := context.WithCancel(context.Background())
+	tenantCtx, cancel := context.WithCancel(ctx)
 
-	// Store tenant consumer info
 	tenantConsumer := &TenantConsumer{
-		OrgSlug:   orgSlug,
-		QueueName: queue.Name,
-		Channel:   tenantChannel,
-		Cancel:    cancel,
+		OrgSlug:     orgSlug,
+		Vhost:       vhost,
+		QueueName:   queueName,
+		ConsumerTag: consumerTag,
+		Channel:     tenantChannel,
+		Cancel:      cancel,
 	}
-	c.tenantConsumers[orgSlug] = tenantConsumer
 
-	// Start processing messages for this tenant
+	c.tenantConsumersMu.Lock()
+	c.tenantConsumers[orgSlug] = tenantConsumer
+	c.tenantConsumersMu.Unlock()
+
 	tenantConsumer.wg.Add(1)
 	go func() {
 		defer tenantConsumer.wg.Done()
-		c.processTenantMessages(tenantCtx, orgSlug, messages)
+		c.processTenantMessages(tenantCtx, tenantConsumer, messages)
 	}()
 
-	log.Printf("Successfully subscribed to org: %s (queue: %s)", orgSlug, queue.Name)
+	log.Printf("Successfully subscribed to org: %s (vhost: %s, queue: %s)", orgSlug, vhost, queueName)
 	return nil
 }
 
 // unsubscribeFromOrganization unsubscribes from a specific organization
 func (c *Client) unsubscribeFromOrganization(orgSlug string) {
 	c.tenantConsumersMu.Lock()
-	defer c.tenantConsumersMu.Unlock()
-
 	consumer, exists := c.tenantConsumers[orgSlug]
 	if !exists {
+		c.tenantConsumersMu.Unlock()
 		log.Printf("Not subscribed to org: %s", orgSlug)
 		return
 	}
+
+	delete(c.tenantConsumers, orgSlug)
+	c.tenantConsumersMu.Unlock()
 
 	log.Printf("Unsubscribing from organization: %s", orgSlug)
 
@@ -439,51 +553,75 @@ func (c *Client) unsubscribeFromOrganization(orgSlug string) {
 
 	// Close the channel
 	if consumer.Channel != nil {
+		_ = consumer.Channel.Cancel(consumer.ConsumerTag, false)
 		_ = consumer.Channel.Close()
 	}
 
-	// Remove from active consumers
-	delete(c.tenantConsumers, orgSlug)
+	c.releaseVhostConnection(consumer.Vhost)
 
-	log.Printf("Successfully unsubscribed from org: %s", orgSlug)
+	log.Printf("Successfully unsubscribed from org: %s (vhost: %s)", orgSlug, consumer.Vhost)
 }
 
 // processTenantMessages processes messages for a specific tenant
-func (c *Client) processTenantMessages(ctx context.Context, orgSlug string, messages <-chan amqp.Delivery) {
-	log.Printf("Processing messages for org: %s", orgSlug)
+func (c *Client) processTenantMessages(ctx context.Context, tenant *TenantConsumer, messages <-chan amqp.Delivery) {
+	log.Printf("Processing messages for org: %s (vhost: %s)", tenant.OrgSlug, tenant.Vhost)
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("Stopping message processing for org: %s", orgSlug)
+			log.Printf("Stopping message processing for org: %s (vhost: %s)", tenant.OrgSlug, tenant.Vhost)
 			return
 
 		case msg, ok := <-messages:
 			if !ok {
-				log.Printf("Message channel closed for org: %s", orgSlug)
+				log.Printf("Message channel closed for org: %s (vhost: %s)", tenant.OrgSlug, tenant.Vhost)
 				return
 			}
 
-			log.Printf("Received message for org %s: routing key %s", orgSlug, msg.RoutingKey)
+			log.Printf("Received message for org %s (vhost: %s): routing key %s", tenant.OrgSlug, tenant.Vhost, msg.RoutingKey)
 			c.handleMessage(msg)
 		}
 	}
 }
 
+func (c *Client) stopAllTenantConsumers() {
+	c.tenantConsumersMu.Lock()
+	for slug, consumer := range c.tenantConsumers {
+		log.Printf("Stopping tenant consumer for org: %s (vhost: %s)", consumer.OrgSlug, consumer.Vhost)
+		consumer.Cancel()
+		consumer.wg.Wait()
+		if consumer.Channel != nil {
+			_ = consumer.Channel.Cancel(consumer.ConsumerTag, false)
+			_ = consumer.Channel.Close()
+		}
+		c.releaseVhostConnection(consumer.Vhost)
+		delete(c.tenantConsumers, slug)
+	}
+	c.tenantConsumersMu.Unlock()
+
+	c.vhostConnectionsMu.Lock()
+	for vhost, pooled := range c.vhostConnections {
+		if pooled != nil && pooled.conn != nil {
+			_ = pooled.conn.Close()
+		}
+		delete(c.vhostConnections, vhost)
+	}
+	c.vhostConnectionsMu.Unlock()
+}
+
 func (c *Client) Stop() error {
 	log.Println("Stopping AMQP client")
-	
+
 	close(c.done)
 
-	if c.channel != nil {
-		if err := c.channel.Cancel(c.config.ConsumerTag, true); err != nil {
-			log.Printf("Error cancelling consumer: %v", err)
-		}
-		_ = c.channel.Close()
+	c.stopAllTenantConsumers()
+
+	if c.orgEventsChannel != nil {
+		_ = c.orgEventsChannel.Close()
 	}
 
-	if c.connection != nil {
-		_ = c.connection.Close()
+	if c.orgEventsConn != nil {
+		_ = c.orgEventsConn.Close()
 	}
 
 	close(c.messagesChan)

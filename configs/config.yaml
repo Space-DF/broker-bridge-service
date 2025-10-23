@@ -25,6 +25,7 @@ mqtt:
 # AMQP Configuration
 amqp:
   url: "amqp://guest:guest@localhost:5672/"
+  allowed_vhosts: []
   auto_ack: false
   exclusive: false
   no_local: false

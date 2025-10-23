@@ -27,17 +27,17 @@ type ServerConfig struct {
 }
 
 type MQTTConfig struct {
-	Broker          string        `mapstructure:"broker" env:"MQTT_BROKER"`
-	Port            int           `mapstructure:"port" env:"MQTT_PORT"`
-	ClientID        string        `mapstructure:"client_id" env:"MQTT_CLIENT_ID"`
-	Username        string        `mapstructure:"username" env:"MQTT_USERNAME"`
-	Password        string        `mapstructure:"password" env:"MQTT_PASSWORD"`
-	Topics          []string      `mapstructure:"topics" env:"MQTT_TOPICS"`
-	QoS             byte          `mapstructure:"qos" env:"MQTT_QOS"`
-	CleanSession    bool          `mapstructure:"clean_session" env:"MQTT_CLEAN_SESSION"`
-	KeepAlive       int           `mapstructure:"keep_alive" env:"MQTT_KEEP_ALIVE"`
-	ConnectTimeout  time.Duration `mapstructure:"connect_timeout" env:"MQTT_CONNECT_TIMEOUT"`
-	ReconnectDelay  time.Duration `mapstructure:"reconnect_delay" env:"MQTT_RECONNECT_DELAY"`
+	Broker         string        `mapstructure:"broker" env:"MQTT_BROKER"`
+	Port           int           `mapstructure:"port" env:"MQTT_PORT"`
+	ClientID       string        `mapstructure:"client_id" env:"MQTT_CLIENT_ID"`
+	Username       string        `mapstructure:"username" env:"MQTT_USERNAME"`
+	Password       string        `mapstructure:"password" env:"MQTT_PASSWORD"`
+	Topics         []string      `mapstructure:"topics" env:"MQTT_TOPICS"`
+	QoS            byte          `mapstructure:"qos" env:"MQTT_QOS"`
+	CleanSession   bool          `mapstructure:"clean_session" env:"MQTT_CLEAN_SESSION"`
+	KeepAlive      int           `mapstructure:"keep_alive" env:"MQTT_KEEP_ALIVE"`
+	ConnectTimeout time.Duration `mapstructure:"connect_timeout" env:"MQTT_CONNECT_TIMEOUT"`
+	ReconnectDelay time.Duration `mapstructure:"reconnect_delay" env:"MQTT_RECONNECT_DELAY"`
 }
 
 // GetBrokerURL constructs the MQTT broker URL from broker and port
@@ -46,30 +46,30 @@ func (m MQTTConfig) GetBrokerURL() string {
 }
 
 type AMQPConfig struct {
-	URL         string `mapstructure:"url" env:"AMQP_BROKER_URL"`
-	Exchange    string `mapstructure:"exchange" env:"AMQP_EXCHANGE"`
-	Queue       string `mapstructure:"queue" env:"AMQP_QUEUE"`
-	RoutingKey  string `mapstructure:"routing_key" env:"AMQP_ROUTING_KEY"`
-	ConsumerTag string `mapstructure:"consumer_tag" env:"AMQP_CONSUMER_TAG"`
-	AutoAck     bool   `mapstructure:"auto_ack" env:"AMQP_AUTO_ACK"`
-	Exclusive   bool   `mapstructure:"exclusive" env:"AMQP_EXCLUSIVE"`
-	NoLocal     bool   `mapstructure:"no_local" env:"AMQP_NO_LOCAL"`
-	NoWait      bool   `mapstructure:"no_wait" env:"AMQP_NO_WAIT"`
+	URL           string   `mapstructure:"url" env:"AMQP_BROKER_URL"`
+	AllowedVhosts []string `mapstructure:"allowed_vhosts" env:"AMQP_ALLOWED_VHOSTS"`
+	Exchange      string   `mapstructure:"exchange" env:"AMQP_EXCHANGE"`
+	Queue         string   `mapstructure:"queue" env:"AMQP_QUEUE"`
+	RoutingKey    string   `mapstructure:"routing_key" env:"AMQP_ROUTING_KEY"`
+	ConsumerTag   string   `mapstructure:"consumer_tag" env:"AMQP_CONSUMER_TAG"`
+	AutoAck       bool     `mapstructure:"auto_ack" env:"AMQP_AUTO_ACK"`
+	Exclusive     bool     `mapstructure:"exclusive" env:"AMQP_EXCLUSIVE"`
+	NoLocal       bool     `mapstructure:"no_local" env:"AMQP_NO_LOCAL"`
+	NoWait        bool     `mapstructure:"no_wait" env:"AMQP_NO_WAIT"`
 }
 
 type OrgEventsConfig struct {
-    Exchange    string `mapstructure:"exchange" env:"ORG_EVENTS_EXCHANGE"`
-    Queue       string `mapstructure:"queue" env:"ORG_EVENTS_QUEUE"`
-    RoutingKey  string `mapstructure:"routing_key" env:"ORG_EVENTS_ROUTING_KEY"`
-    ConsumerTag string `mapstructure:"consumer_tag" env:"ORG_EVENTS_CONSUMER_TAG"`
+	Exchange    string `mapstructure:"exchange" env:"ORG_EVENTS_EXCHANGE"`
+	Queue       string `mapstructure:"queue" env:"ORG_EVENTS_QUEUE"`
+	RoutingKey  string `mapstructure:"routing_key" env:"ORG_EVENTS_ROUTING_KEY"`
+	ConsumerTag string `mapstructure:"consumer_tag" env:"ORG_EVENTS_CONSUMER_TAG"`
 }
 
 type RateLimitConfig struct {
-	Enabled            bool `mapstructure:"enabled" env:"RATE_LIMIT_ENABLED"`
-	RequestsPerMinute  int  `mapstructure:"requests_per_minute" env:"RATE_LIMIT_REQUESTS_PER_MINUTE"`
-	BurstSize          int  `mapstructure:"burst_size" env:"RATE_LIMIT_BURST_SIZE"`
+	Enabled           bool `mapstructure:"enabled" env:"RATE_LIMIT_ENABLED"`
+	RequestsPerMinute int  `mapstructure:"requests_per_minute" env:"RATE_LIMIT_REQUESTS_PER_MINUTE"`
+	BurstSize         int  `mapstructure:"burst_size" env:"RATE_LIMIT_BURST_SIZE"`
 }
-
 
 func New() (Config, error) {
 	var config Config
@@ -111,9 +111,13 @@ func New() (Config, error) {
 		return config, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	if raw := vp.GetString("amqp.allowed_vhosts"); raw != "" {
+		config.AMQP.AllowedVhosts = splitAndTrim(raw)
+	}
+
 	// Debug logging for AMQP config
 	log.Printf("AMQP URL from config: %s", config.AMQP.URL)
-	
+
 	return config, nil
 }
 
@@ -138,9 +142,9 @@ func setDefaults(vp *viper.Viper) {
 	vp.SetDefault("mqtt.connect_timeout", "10s")
 	vp.SetDefault("mqtt.reconnect_delay", "5s")
 
-
 	// AMQP defaults
 	vp.SetDefault("amqp.url", "amqp://guest:guest@localhost:5672/")
+	vp.SetDefault("amqp.allowed_vhosts", "")
 	vp.SetDefault("amqp.auto_ack", false)
 	vp.SetDefault("amqp.exclusive", false)
 	vp.SetDefault("amqp.no_local", false)
@@ -160,7 +164,7 @@ func setDefaults(vp *viper.Viper) {
 
 func bindEnvVars(vp *viper.Viper) {
 	// Server environment variables
-  _ = vp.BindEnv("server.host", "SERVER_HOST")
+	_ = vp.BindEnv("server.host", "SERVER_HOST")
 	_ = vp.BindEnv("server.port", "SERVER_PORT")
 	_ = vp.BindEnv("server.log_level", "SERVER_LOG_LEVEL")
 	_ = vp.BindEnv("server.read_timeout", "SERVER_READ_TIMEOUT")
@@ -181,6 +185,7 @@ func bindEnvVars(vp *viper.Viper) {
 
 	// AMQP environment variables
 	_ = vp.BindEnv("amqp.url", "AMQP_BROKER_URL")
+	_ = vp.BindEnv("amqp.allowed_vhosts", "AMQP_ALLOWED_VHOSTS")
 	_ = vp.BindEnv("amqp.exchange", "AMQP_EXCHANGE")
 	_ = vp.BindEnv("amqp.queue", "AMQP_QUEUE")
 	_ = vp.BindEnv("amqp.routing_key", "AMQP_ROUTING_KEY")
@@ -198,12 +203,23 @@ func bindEnvVars(vp *viper.Viper) {
 
 	// Org events defaults
 	vp.SetDefault("org_events.exchange", "org.events")
-	vp.SetDefault("org_events.queue", "transformer.org.events.queue")
+	vp.SetDefault("org_events.queue", "broker-bridge.org.events.queue")
 	vp.SetDefault("org_events.routing_key", "org.#")
-	vp.SetDefault("org_events.consumer_tag", "transformer-org-events")
+	vp.SetDefault("org_events.consumer_tag", "broker-bridge-org-events")
 
 	// Rate limit environment variables
 	_ = vp.BindEnv("rate_limit.enabled", "RATE_LIMIT_ENABLED")
 	_ = vp.BindEnv("rate_limit.requests_per_minute", "RATE_LIMIT_REQUESTS_PER_MINUTE")
 	_ = vp.BindEnv("rate_limit.burst_size", "RATE_LIMIT_BURST_SIZE")
+}
+
+func splitAndTrim(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
