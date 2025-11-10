@@ -2,6 +2,7 @@ package models
 
 import (
 	"time"
+
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -10,6 +11,7 @@ type DeviceMessage struct {
 	DevEUI       string                 `json:"dev_eui"`
 	DeviceName   string                 `json:"device_name,omitempty"`
 	Organization string                 `json:"organization,omitempty"`
+	SpaceSlug      string               `json:"space_slug,omitempty"`
 	Latitude     float64                `json:"latitude"`
 	Longitude    float64                `json:"longitude"`
 	Accuracy     string                 `json:"accuracy,omitempty"`
@@ -55,6 +57,7 @@ type Location struct {
 type DeviceLocationUpdate struct {
 	DeviceEUI    string                 `json:"device_eui"`
 	DeviceID     string                 `json:"device_id"`
+	SpaceSlug      string               `json:"space_slug,omitempty"`
 	Location     Location               `json:"location"`
 	Timestamp    time.Time              `json:"timestamp"`
 	Organization string                 `json:"organization,omitempty"`
