@@ -189,5 +189,5 @@ func buildTelemetryTopic(update *models.DeviceLocationUpdate) string {
 		return fmt.Sprintf("tenant/%s/space/%s/device/%s/telemetry", orgSegment, spaceSegment, deviceSegment)
 	}
 
-	return fmt.Sprintf("tenant/%s/space/all/device/%s/telemetry", orgSegment, deviceSegment)
+	return fmt.Sprintf("tenant/%s/device/%s/telemetry", orgSegment, deviceSegment)
 }
