@@ -133,18 +133,19 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 			locationUpdate := messageWithDelivery.LocationUpdate
 			delivery := messageWithDelivery.Delivery
 			
-			// Publish to MQTT device telemetry topic using device_id
-			deviceID := locationUpdate.DeviceID
-			if deviceID == "" {
-				deviceID = "unknown"
-			}
+			// Publish to MQTT device telemetry topic with tenant/device segmentation
+			topic, err := b.mqttClient.PublishDeviceTelemetry(locationUpdate)
+			if err != nil {
+				deviceLabel := locationUpdate.DeviceID
+				if deviceLabel == "" {
+					deviceLabel = "unknown"
+				}
 			
-			if err := b.mqttClient.PublishDeviceTelemetry(deviceID, locationUpdate); err != nil {
-				log.Printf("Failed to publish device telemetry for %s: %v", deviceID, err)
+				log.Printf("Failed to publish device telemetry for %s: %v", deviceLabel, err)
 				// NACK the message to requeue it
 				_ = b.amqpClient.NackMessage(delivery, true)
 			} else {
-				log.Printf("Successfully published telemetry for device %s to MQTT topic device/%s/telemetry", deviceID, deviceID)
+				log.Printf("Successfully published telemetry to MQTT topic %s", topic)
 				// ACK the message only after successful MQTT publish
 				_ = b.amqpClient.AckMessage(delivery)
 			}

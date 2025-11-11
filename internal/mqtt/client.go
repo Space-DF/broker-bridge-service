@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/Space-DF/broker-bridge-service/internal/config"
@@ -161,8 +162,32 @@ func (c *Client) Publish(topic string, payload interface{}) error {
 	return nil
 }
 
-// PublishDeviceTelemetry publishes device location data to device/{device_id}/telemetry topic
-func (c *Client) PublishDeviceTelemetry(deviceID string, locationUpdate *models.DeviceLocationUpdate) error {
-	topic := fmt.Sprintf("device/%s/telemetry", deviceID)
-	return c.Publish(topic, locationUpdate)
+// PublishDeviceTelemetry publishes device location data to a tenant-scoped topic.
+func (c *Client) PublishDeviceTelemetry(locationUpdate *models.DeviceLocationUpdate) (string, error) {
+	if locationUpdate == nil {
+		return "", fmt.Errorf("location update is nil")
+	}
+
+	topic := buildTelemetryTopic(locationUpdate)
+	if err := c.Publish(topic, locationUpdate); err != nil {
+		return "", err
+	}
+
+	return topic, nil
+}
+
+func buildTelemetryTopic(update *models.DeviceLocationUpdate) string {
+	orgSegment := strings.TrimSpace(update.Organization)
+	spaceSegment := strings.TrimSpace(update.SpaceSlug)
+	deviceSegment := strings.TrimSpace(update.DeviceID)
+
+	if deviceSegment == "" {
+		deviceSegment = "unknown"
+	}
+
+	if spaceSegment != "" {
+		return fmt.Sprintf("tenant/%s/space/%s/device/%s/telemetry", orgSegment, spaceSegment, deviceSegment)
+	}
+
+	return fmt.Sprintf("tenant/%s/device/%s/telemetry", orgSegment, deviceSegment)
 }
