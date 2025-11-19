@@ -14,7 +14,7 @@ type DeviceMessage struct {
 	SpaceSlug      string               `json:"space_slug,omitempty"`
 	Latitude     float64                `json:"latitude"`
 	Longitude    float64                `json:"longitude"`
-	Accuracy     string                 `json:"accuracy,omitempty"`
+	Accuracy     float64                `json:"accuracy,omitempty"`
 	Timestamp    time.Time              `json:"timestamp"`
 	Topic        string                 `json:"topic,omitempty"`
 	ReceivedAt   time.Time              `json:"received_at,omitempty"`
@@ -50,14 +50,14 @@ type ConnectionInfo struct {
 type Location struct {
 	Latitude  float64 `json:"latitude"`
 	Longitude float64 `json:"longitude"`
-	Accuracy  string  `json:"accuracy,omitempty"`
+	Accuracy  float64 `json:"accuracy,omitempty"`
 }
 
 // DeviceLocationUpdate represents real-time location updates
 type DeviceLocationUpdate struct {
 	DeviceEUI    string                 `json:"device_eui"`
 	DeviceID     string                 `json:"device_id"`
-	SpaceSlug      string               `json:"space_slug,omitempty"`
+	SpaceSlug    string                 `json:"space_slug,omitempty"`
 	Location     Location               `json:"location"`
 	Timestamp    time.Time              `json:"timestamp"`
 	Organization string                 `json:"organization,omitempty"`
