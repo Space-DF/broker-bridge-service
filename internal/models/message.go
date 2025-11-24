@@ -11,7 +11,8 @@ type DeviceMessage struct {
 	DevEUI       string                 `json:"dev_eui"`
 	DeviceName   string                 `json:"device_name,omitempty"`
 	Organization string                 `json:"organization,omitempty"`
-	SpaceSlug      string               `json:"space_slug,omitempty"`
+	SpaceSlug    string                 `json:"space_slug,omitempty"`
+	IsPublished  bool                   `json:"is_published"`
 	Latitude     float64                `json:"latitude"`
 	Longitude    float64                `json:"longitude"`
 	Accuracy     float64                `json:"accuracy,omitempty"`
@@ -58,6 +59,7 @@ type DeviceLocationUpdate struct {
 	DeviceEUI    string                 `json:"device_eui"`
 	DeviceID     string                 `json:"device_id"`
 	SpaceSlug    string                 `json:"space_slug,omitempty"`
+	IsPublished  bool                   `json:"is_published"`
 	Location     Location               `json:"location"`
 	Timestamp    time.Time              `json:"timestamp"`
 	Organization string                 `json:"organization,omitempty"`
@@ -74,11 +76,11 @@ type AMQPMessageWithDelivery struct {
 
 // DeviceStatusUpdate represents device status changes
 type DeviceStatusUpdate struct {
-	DevEUI      string    `json:"dev_eui"`
-	DeviceName  string    `json:"device_name,omitempty"`
-	Status      string    `json:"status"`
-	LastSeen    time.Time `json:"last_seen"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	DevEUI     string    `json:"dev_eui"`
+	DeviceName string    `json:"device_name,omitempty"`
+	Status     string    `json:"status"`
+	LastSeen   time.Time `json:"last_seen"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // ErrorMessage represents error responses

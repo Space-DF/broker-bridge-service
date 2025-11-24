@@ -177,17 +177,24 @@ func (c *Client) PublishDeviceTelemetry(locationUpdate *models.DeviceLocationUpd
 }
 
 func buildTelemetryTopic(update *models.DeviceLocationUpdate) string {
-	orgSegment := strings.TrimSpace(update.Organization)
-	spaceSegment := strings.TrimSpace(update.SpaceSlug)
-	deviceSegment := strings.TrimSpace(update.DeviceID)
-
-	if deviceSegment == "" {
-		deviceSegment = "unknown"
+	if update == nil {
+		return "tenant/unknown/device/unknown/telemetry"
 	}
 
-	if spaceSegment != "" {
-		return fmt.Sprintf("tenant/%s/space/%s/device/%s/telemetry", orgSegment, spaceSegment, deviceSegment)
+	org := strings.TrimSpace(update.Organization)
+	if org == "" {
+		org = "unknown"
 	}
 
-	return fmt.Sprintf("tenant/%s/device/%s/telemetry", orgSegment, deviceSegment)
+	device := strings.TrimSpace(update.DeviceID)
+	if device == "" {
+		device = "unknown"
+	}
+
+	space := strings.TrimSpace(update.SpaceSlug)
+	if update.IsPublished {
+		return fmt.Sprintf("tenant/%s/device/%s/telemetry", org, device)
+	}
+
+	return fmt.Sprintf("tenant/%s/space/%s/device/%s/telemetry", org, space, device)
 }
