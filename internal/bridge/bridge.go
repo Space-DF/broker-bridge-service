@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"log"
+	"sync"
 
 	"github.com/Space-DF/broker-bridge-service/internal/amqp"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
@@ -15,6 +16,7 @@ type Bridge struct {
 	mqttClient    *mqtt.Client
 	amqpClient    *amqp.Client
 	done          chan bool
+	stopOnce 		  sync.Once
 }
 
 // NewBridge creates a new bridge instance
@@ -49,7 +51,7 @@ func (b *Bridge) Start(ctx context.Context) error {
 		if err := b.mqttClient.Start(ctx); err != nil {
 			log.Printf("MQTT client error: %v", err)
 			errorChan <- err
-			close(b.done)
+			b.stopOnce.Do(func() { close(b.done) })
 			return
 		}
 	}()
@@ -59,7 +61,7 @@ func (b *Bridge) Start(ctx context.Context) error {
 		if err := b.amqpClient.Start(ctx); err != nil {
 			log.Printf("AMQP client error: %v", err)
 			errorChan <- err
-			close(b.done)
+			b.stopOnce.Do(func() { close(b.done) })
 			return
 		}
 	}()
@@ -92,7 +94,7 @@ func (b *Bridge) Start(ctx context.Context) error {
 func (b *Bridge) Stop() error {
 	log.Println("Stopping Broker Bridge Service")
 	
-	close(b.done)
+	b.stopOnce.Do(func() { close(b.done) })
 
 	if b.mqttClient != nil {
 		if err := b.mqttClient.Stop(); err != nil {

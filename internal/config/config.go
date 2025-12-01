@@ -73,7 +73,6 @@ type RateLimitConfig struct {
 
 func New() (Config, error) {
 	var config Config
-
 	vp := viper.New()
 
 	// Set defaults first (lowest priority)
