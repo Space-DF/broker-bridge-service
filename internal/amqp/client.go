@@ -351,12 +351,13 @@ func (c *Client) stopAllConsumers() {
 	for slug, consumer := range c.tenantConsumers {
 		if consumer != nil {
 			consumer.Cancel()
+			consumer.wg.Wait()
 			if consumer.Channel != nil {
 				_ = consumer.Channel.Cancel(consumer.ConsumerTag, false)
 				_ = consumer.Channel.Close()
 			}
 			c.vhostPool.Release(consumer.Vhost)
-			logging.Tenant(consumer.OrgSlug, consumer.Vhost, "Stopped consuming from %s", consumer.QueueName)
+			logging.Tenant(consumer.OrgSlug, consumer.Vhost, "", "Stopped consuming from %s", consumer.QueueName)
 		}
 		delete(c.tenantConsumers, slug)
 	}
