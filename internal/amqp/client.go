@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,39 +107,56 @@ func (c *Client) Start(ctx context.Context) error {
 }
 
 func (c *Client) handleMessage(msg amqp.Delivery) {
-	log.Printf("Received message from AMQP: routing key %s", msg.RoutingKey)
-	log.Printf("AMQP message body: %s", string(msg.Body))
+	isEntityTelemetry := strings.Contains(msg.RoutingKey, ".entity.") && strings.HasSuffix(msg.RoutingKey, ".telemetry")
+	
+	if isEntityTelemetry {
+		var entityPayload models.EntityTelemetryPayload
+		if err := json.Unmarshal(msg.Body, &entityPayload); err == nil && entityPayload.Entity.UniqueID != "" {
+			messageWithDelivery := &models.AMQPMessageWithDelivery{
+				Kind:         models.KindEntityTelemetry,
+				EntityUpdate: &entityPayload,
+				Delivery:     &msg,
+			}
 
+			select {
+			case c.messagesChan <- messageWithDelivery:
+				// Successfully queued
+			default:
+				log.Printf("Message channel full, dropping entity telemetry for entity: %s", entityPayload.Entity.UniqueID)
+				if !c.config.AutoAck {
+					_ = msg.Nack(false, true)
+				}
+			}
+			return
+		}
+	}
+
+	// Try to parse as device location update
 	var locationUpdate models.DeviceLocationUpdate
-	if err := json.Unmarshal(msg.Body, &locationUpdate); err != nil {
-		log.Printf("Error unmarshaling message: %v", err)
-		if !c.config.AutoAck {
-			_ = msg.Nack(false, false)
+	if err := json.Unmarshal(msg.Body, &locationUpdate); err == nil && locationUpdate.DeviceEUI != "" {
+		locationUpdate.UpdatedAt = time.Now()
+
+		messageWithDelivery := &models.AMQPMessageWithDelivery{
+			Kind:           models.KindLocationUpdate,
+			LocationUpdate: &locationUpdate,
+			Delivery:       &msg,
+		}
+
+		select {
+		case c.messagesChan <- messageWithDelivery:
+			// Successfully queued
+		default:
+			log.Printf("Message channel full, dropping location update for device: %s", locationUpdate.DeviceEUI)
+			if !c.config.AutoAck {
+				_ = msg.Nack(false, true)
+			}
 		}
 		return
 	}
 
-	locationUpdate.UpdatedAt = time.Now()
-
-	// Create message with delivery for reliable processing
-	messageWithDelivery := &models.AMQPMessageWithDelivery{
-		LocationUpdate: &locationUpdate,
-		Delivery:       &msg,
-	}
-
-	select {
-	case c.messagesChan <- messageWithDelivery:
-		log.Printf("Location update queued for device: %s (channel length after: %d/%d)",
-			locationUpdate.DeviceEUI, len(c.messagesChan), cap(c.messagesChan))
-		// Do not ACK here - ACK will be handled after successful MQTT publish
-	default:
-		log.Printf("DEBUG: Message channel full! Current length: %d, capacity: %d",
-			len(c.messagesChan), cap(c.messagesChan))
-		log.Printf("DEBUG: Channel is at 100%% capacity - consumer may be too slow or blocked")
-		log.Printf("Message channel full, dropping location update for device: %s", locationUpdate.DeviceEUI)
-		if !c.config.AutoAck {
-			_ = msg.Nack(false, true)
-		}
+	log.Printf("Error unmarshaling message into known types; dropping")
+	if !c.config.AutoAck {
+		_ = msg.Nack(false, false)
 	}
 }
 

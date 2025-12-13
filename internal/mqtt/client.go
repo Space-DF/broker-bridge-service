@@ -158,7 +158,6 @@ func (c *Client) Publish(topic string, payload interface{}) error {
 		return fmt.Errorf("failed to publish message: %w", token.Error())
 	}
 
-	log.Printf("Published message to topic: %s", topic)
 	return nil
 }
 
@@ -174,6 +173,47 @@ func (c *Client) PublishDeviceTelemetry(locationUpdate *models.DeviceLocationUpd
 	}
 
 	return topic, nil
+}
+
+// PublishEntityTelemetry publishes per-entity telemetry to a tenant-scoped topic.
+func (c *Client) PublishEntityTelemetry(entityUpdate *models.EntityTelemetryPayload) (string, error) {
+	if entityUpdate == nil {
+		return "", fmt.Errorf("entity update is nil")
+	}
+
+	topic := buildEntityTopic(entityUpdate)
+	if err := c.Publish(topic, entityUpdate); err != nil {
+		return "", err
+	}
+
+	return topic, nil
+}
+
+func buildEntityTopic(update *models.EntityTelemetryPayload) string {
+	if update == nil {
+		return "tenant/unknown/entity/unknown/telemetry"
+	}
+
+	org := strings.TrimSpace(update.Organization)
+	if org == "" {
+		org = "unknown"
+	}
+
+	entity := strings.TrimSpace(update.Entity.UniqueID)
+	if entity == "" {
+		entity = strings.TrimSpace(update.Entity.EntityID)
+	}
+	if entity == "" {
+		entity = "unknown"
+	}
+
+	space := strings.TrimSpace(update.SpaceSlug)
+
+	if space != "" {
+		return fmt.Sprintf("tenant/%s/space/%s/entity/%s/telemetry", org, space, entity)
+	}
+
+	return fmt.Sprintf("tenant/%s/entity/%s/telemetry", org, entity)
 }
 
 func buildTelemetryTopic(update *models.DeviceLocationUpdate) string {
