@@ -201,19 +201,16 @@ func buildEntityTopic(update *models.EntityTelemetryPayload) string {
 
 	entity := strings.TrimSpace(update.Entity.UniqueID)
 	if entity == "" {
-		entity = strings.TrimSpace(update.Entity.EntityID)
-	}
-	if entity == "" {
 		entity = "unknown"
 	}
 
 	space := strings.TrimSpace(update.SpaceSlug)
 
-	if space != "" {
-		return fmt.Sprintf("tenant/%s/space/%s/entity/%s/telemetry", org, space, entity)
+	if update.IsPublished {
+		return fmt.Sprintf("tenant/%s/entity/%s/telemetry", org, entity)
 	}
 
-	return fmt.Sprintf("tenant/%s/entity/%s/telemetry", org, entity)
+	return fmt.Sprintf("tenant/%s/space/%s/entity/%s/telemetry", org, space, entity)
 }
 
 func buildTelemetryTopic(update *models.DeviceLocationUpdate) string {

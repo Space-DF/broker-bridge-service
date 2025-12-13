@@ -109,6 +109,7 @@ type EntityTelemetryPayload struct {
 	Entity       TelemetryEntity `json:"entity"`
 	Timestamp    string          `json:"timestamp"`
 	Source       string          `json:"source"`
+	IsPublished  bool 					 `json:"is_published"`
 	Metadata     map[string]any  `json:"metadata,omitempty"`
 }
 
