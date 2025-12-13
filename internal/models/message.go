@@ -70,7 +70,9 @@ type DeviceLocationUpdate struct {
 
 // AMQPMessageWithDelivery combines location update with AMQP delivery info for reliable processing
 type AMQPMessageWithDelivery struct {
+	Kind           MessageKind
 	LocationUpdate *DeviceLocationUpdate
+	EntityUpdate   *EntityTelemetryPayload
 	Delivery       *amqp.Delivery
 }
 
@@ -88,4 +90,39 @@ type ErrorMessage struct {
 	Error   string `json:"error"`
 	Code    int    `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
+}
+
+// MessageKind identifies what type of AMQP payload was received.
+type MessageKind string
+
+const (
+	KindLocationUpdate  MessageKind = "location_update"
+	KindEntityTelemetry MessageKind = "entity_telemetry"
+)
+
+// EntityTelemetryPayload mirrors transformer per-entity telemetry.
+type EntityTelemetryPayload struct {
+	Organization string          `json:"organization"`
+	DeviceEUI    string          `json:"device_eui"`
+	DeviceID     string          `json:"device_id,omitempty"`
+	SpaceSlug    string          `json:"space_slug,omitempty"`
+	Entity       TelemetryEntity `json:"entity"`
+	Timestamp    string          `json:"timestamp"`
+	Source       string          `json:"source"`
+	Metadata     map[string]any  `json:"metadata,omitempty"`
+}
+
+// TelemetryEntity represents a single entity state.
+type TelemetryEntity struct {
+	UniqueID    string         `json:"unique_id"`
+	EntityID    string         `json:"entity_id"`
+	EntityType  string         `json:"entity_type"`
+	DeviceClass string         `json:"device_class,omitempty"`
+	Name        string         `json:"name"`
+	State       any            `json:"state"`
+	Attributes  map[string]any `json:"attributes,omitempty"`
+	DisplayType []string       `json:"display_type,omitempty"`
+	UnitOfMeas  string         `json:"unit_of_measurement,omitempty"`
+	Icon        string         `json:"icon,omitempty"`
+	Timestamp   string         `json:"timestamp"`
 }

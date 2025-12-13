@@ -7,16 +7,17 @@ import (
 
 	"github.com/Space-DF/broker-bridge-service/internal/amqp"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
+	"github.com/Space-DF/broker-bridge-service/internal/models"
 	"github.com/Space-DF/broker-bridge-service/internal/mqtt"
 )
 
 // Bridge connects AMQP (RabbitMQ) and MQTT (EMQX) brokers
 type Bridge struct {
-	config        config.Config
-	mqttClient    *mqtt.Client
-	amqpClient    *amqp.Client
-	done          chan bool
-	stopOnce 		  sync.Once
+	config     config.Config
+	mqttClient *mqtt.Client
+	amqpClient *amqp.Client
+	done       chan bool
+	stopOnce   sync.Once
 }
 
 // NewBridge creates a new bridge instance
@@ -93,7 +94,7 @@ func (b *Bridge) Start(ctx context.Context) error {
 // Stop gracefully stops the bridge service
 func (b *Bridge) Stop() error {
 	log.Println("Stopping Broker Bridge Service")
-	
+
 	b.stopOnce.Do(func() { close(b.done) })
 
 	if b.mqttClient != nil {
@@ -115,9 +116,9 @@ func (b *Bridge) Stop() error {
 // processAMQPMessages handles processing messages from AMQP and publishes to MQTT
 func (b *Bridge) processAMQPMessages(ctx context.Context) {
 	log.Println("Starting AMQP message processing")
-	
+
 	messagesChan := b.amqpClient.GetMessagesChan()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -131,25 +132,47 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 				log.Println("AMQP messages channel closed")
 				return
 			}
-			
-			locationUpdate := messageWithDelivery.LocationUpdate
+
 			delivery := messageWithDelivery.Delivery
-			
-			// Publish to MQTT device telemetry topic with tenant/device segmentation
-			topic, err := b.mqttClient.PublishDeviceTelemetry(locationUpdate)
-			if err != nil {
-				deviceLabel := locationUpdate.DeviceID
-				if deviceLabel == "" {
-					deviceLabel = "unknown"
+
+			switch messageWithDelivery.Kind {
+			case models.KindLocationUpdate:
+				locationUpdate := messageWithDelivery.LocationUpdate
+
+				topic, err := b.mqttClient.PublishDeviceTelemetry(locationUpdate)
+				if err != nil {
+					deviceId := locationUpdate.DeviceID
+					if deviceId == "" {
+						deviceId = "unknown"
+					}
+
+					log.Printf("Failed to publish device telemetry for %s: %v", deviceId, err)
+					// NACK the message to requeue it
+					_ = b.amqpClient.NackMessage(delivery, true)
+				} else {
+					log.Printf("Successfully published telemetry to MQTT topic %s", topic)
+					// ACK the message only after successful MQTT publish
+					_ = b.amqpClient.AckMessage(delivery)
 				}
-			
-				log.Printf("Failed to publish device telemetry for %s: %v", deviceLabel, err)
-				// NACK the message to requeue it
-				_ = b.amqpClient.NackMessage(delivery, true)
-			} else {
-				log.Printf("Successfully published telemetry to MQTT topic %s", topic)
-				// ACK the message only after successful MQTT publish
-				_ = b.amqpClient.AckMessage(delivery)
+
+			case models.KindEntityTelemetry:
+				entityUpdate := messageWithDelivery.EntityUpdate
+
+				_, err := b.mqttClient.PublishEntityTelemetry(entityUpdate)
+				if err != nil {
+					entityId := entityUpdate.Entity.UniqueID
+					if entityId == "" {
+						entityId = "unknown"
+					}
+					log.Printf("Failed to publish entity telemetry for %s: %v", entityId, err)
+					_ = b.amqpClient.NackMessage(delivery, true)
+				} else {
+					_ = b.amqpClient.AckMessage(delivery)
+				}
+
+			default:
+				log.Printf("Unknown message kind; NACKing")
+				_ = b.amqpClient.NackMessage(delivery, false)
 			}
 		}
 	}
@@ -158,9 +181,9 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 // processMQTTMessages handles processing messages from MQTT (if needed for bidirectional communication)
 func (b *Bridge) processMQTTMessages(ctx context.Context) {
 	log.Println("Starting MQTT message processing")
-	
+
 	messagesChan := b.mqttClient.GetMessagesChan()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -174,7 +197,7 @@ func (b *Bridge) processMQTTMessages(ctx context.Context) {
 				log.Println("MQTT messages channel closed")
 				return
 			}
-			
+
 			// Process MQTT messages if needed for bidirectional communication
 			log.Printf("Received MQTT message from device: %s on topic: %s", deviceMsg.DevEUI, deviceMsg.Topic)
 		}
