@@ -12,7 +12,9 @@ import (
 
 	"github.com/Space-DF/broker-bridge-service/internal/bridge"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
+	"github.com/Space-DF/broker-bridge-service/internal/telemetry"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 var (
@@ -42,6 +44,10 @@ func main() {
 }
 
 func runServer(cmd *cobra.Command, args []string) {
+	// Initialize OpenTelemetry tracing
+	cleanup := telemetry.InitTracing("broker-bridge-service")
+	defer cleanup()
+
 	// Load configuration
 	cfg, err := config.New()
 	if err != nil {
@@ -73,10 +79,13 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Health check endpoint
 	mux.HandleFunc("/health", healthCheckHandler)
 
+	// Wrap the handler with OpenTelemetry middleware
+	handler := otelhttp.NewHandler(mux, "broker-bridge-service")
+
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
@@ -130,7 +139,7 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	response := `{
 		"status": "healthy",
 		"service": "broker-bridge-service",
-		"timestamp": "` + time.Now().Format(time.RFC3339) + `"
+		"timestamp": "` + time.Now().UTC().Format(time.RFC3339) + `"
 	}`
 	
 	_, _ = w.Write([]byte(response))
