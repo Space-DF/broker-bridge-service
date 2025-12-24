@@ -11,11 +11,12 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	MQTT      MQTTConfig      `mapstructure:"mqtt"`
-	AMQP      AMQPConfig      `mapstructure:"amqp"`
-	OrgEvents OrgEventsConfig `mapstructure:"org_events"`
-	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
+	Server         ServerConfig         `mapstructure:"server"`
+	MQTT           MQTTConfig           `mapstructure:"mqtt"`
+	AMQP           AMQPConfig           `mapstructure:"amqp"`
+	OrgEvents      OrgEventsConfig      `mapstructure:"org_events"`
+	RateLimit      RateLimitConfig      `mapstructure:"rate_limit"`
+	OpenTelemetry  OpenTelemetryConfig  `mapstructure:"opentelemetry"`
 }
 
 type ServerConfig struct {
@@ -69,6 +70,12 @@ type RateLimitConfig struct {
 	Enabled           bool `mapstructure:"enabled" env:"RATE_LIMIT_ENABLED"`
 	RequestsPerMinute int  `mapstructure:"requests_per_minute" env:"RATE_LIMIT_REQUESTS_PER_MINUTE"`
 	BurstSize         int  `mapstructure:"burst_size" env:"RATE_LIMIT_BURST_SIZE"`
+}
+
+type OpenTelemetryConfig struct {
+	Endpoint      string  `mapstructure:"endpoint" env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
+	Environment   string  `mapstructure:"environment" env:"OTEL_ENVIRONMENT"`
+	SamplingRatio float64 `mapstructure:"sampling_ratio" env:"OTEL_TRACES_SAMPLER_ARG"`
 }
 
 func New() (Config, error) {
@@ -159,6 +166,11 @@ func setDefaults(vp *viper.Viper) {
 	vp.SetDefault("rate_limit.enabled", true)
 	vp.SetDefault("rate_limit.requests_per_minute", 1000)
 	vp.SetDefault("rate_limit.burst_size", 100)
+
+	// OpenTelemetry defaults
+	vp.SetDefault("opentelemetry.endpoint", "signoz-otel-collector:4317")
+	vp.SetDefault("opentelemetry.environment", "development")
+	vp.SetDefault("opentelemetry.sampling_ratio", 1.0)
 }
 
 func bindEnvVars(vp *viper.Viper) {
@@ -210,6 +222,11 @@ func bindEnvVars(vp *viper.Viper) {
 	_ = vp.BindEnv("rate_limit.enabled", "RATE_LIMIT_ENABLED")
 	_ = vp.BindEnv("rate_limit.requests_per_minute", "RATE_LIMIT_REQUESTS_PER_MINUTE")
 	_ = vp.BindEnv("rate_limit.burst_size", "RATE_LIMIT_BURST_SIZE")
+
+	// OpenTelemetry environment variables
+	_ = vp.BindEnv("opentelemetry.endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT")
+	_ = vp.BindEnv("opentelemetry.environment", "OTEL_ENVIRONMENT")
+	_ = vp.BindEnv("opentelemetry.sampling_ratio", "OTEL_TRACES_SAMPLER_ARG")
 }
 
 func splitAndTrim(value string) []string {

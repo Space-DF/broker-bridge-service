@@ -3,10 +3,9 @@ package telemetry
 import (
 	"context"
 	"log"
-	"os"
-	"strconv"
 	"time"
 
+	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -23,12 +22,25 @@ import (
 var logger otellog.Logger
 
 // InitTracing initializes OpenTelemetry tracing for the service
-func InitTracing(serviceName string) func() {
+func InitTracing(serviceName string, cfg config.OpenTelemetryConfig) func() {
 	ctx := context.Background()
 
-	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	otlpEndpoint := cfg.Endpoint
 	if otlpEndpoint == "" {
 		otlpEndpoint = "signoz-otel-collector:4317"
+	}
+
+	environment := cfg.Environment
+	if environment == "" {
+		environment = "development"
+	}
+
+	// Validate and clamp sampling ratio
+	samplingRatio := cfg.SamplingRatio
+	if samplingRatio < 0.0 {
+		samplingRatio = 0.0
+	} else if samplingRatio > 1.0 {
+		samplingRatio = 1.0
 	}
 
 	// Create resource
@@ -36,7 +48,7 @@ func InitTracing(serviceName string) func() {
 		resource.WithAttributes(
 			semconv.ServiceNameKey.String(serviceName),
 			semconv.ServiceVersionKey.String("1.0.0"),
-			semconv.DeploymentEnvironmentKey.String(getEnv("OTEL_ENVIRONMENT", "development")),
+			semconv.DeploymentEnvironmentKey.String(environment),
 		),
 	)
 	if err != nil {
@@ -59,7 +71,7 @@ func InitTracing(serviceName string) func() {
 	tp := trace.NewTracerProvider(
 		trace.WithBatcher(traceExporter),
 		trace.WithResource(res),
-		trace.WithSampler(trace.TraceIDRatioBased(getSamplingRatio())),
+		trace.WithSampler(trace.TraceIDRatioBased(samplingRatio)),
 	)
 
 	otel.SetTracerProvider(tp)
@@ -147,33 +159,4 @@ func LogWarn(ctx context.Context, message string, attrs ...otellog.KeyValue) {
 	record.SetSeverity(otellog.SeverityWarn)
 	record.AddAttributes(attrs...)
 	logger.Emit(ctx, record)
-}
-
-// getEnv gets an environment variable or returns a default value
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// getSamplingRatio gets the sampling ratio from environment or returns 1.0 (100%)
-// Supports any value between 0.0 and 1.0
-func getSamplingRatio() float64 {
-	ratio := getEnv("OTEL_TRACES_SAMPLER_ARG", "1.0")
-	
-	// Parse as float
-	value, err := strconv.ParseFloat(ratio, 64)
-	if err != nil {
-		log.Printf("Invalid OTEL_TRACES_SAMPLER_ARG '%s', using default 1.0: %v", ratio, err)
-		return 1.0
-	}
-	
-	// Validate range [0.0, 1.0]
-	if value < 0.0 || value > 1.0 {
-		log.Printf("OTEL_TRACES_SAMPLER_ARG '%s' out of range [0.0, 1.0], using 1.0", ratio)
-		return 1.0
-	}
-	
-	return value
 }

@@ -44,15 +44,15 @@ func main() {
 }
 
 func runServer(cmd *cobra.Command, args []string) {
-	// Initialize OpenTelemetry tracing
-	cleanup := telemetry.InitTracing("broker-bridge-service")
-	defer cleanup()
-
 	// Load configuration
 	cfg, err := config.New()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+
+	// Initialize OpenTelemetry tracing
+	cleanup := telemetry.InitTracing("broker-bridge-service", cfg.OpenTelemetry)
+	defer cleanup()
 
 	// Create bridge instance
 	br := bridge.NewBridge(cfg)
