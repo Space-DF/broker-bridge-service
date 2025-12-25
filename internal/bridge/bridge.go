@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"github.com/Space-DF/broker-bridge-service/internal/models"
 	"github.com/Space-DF/broker-bridge-service/internal/mqtt"
+	"github.com/Space-DF/broker-bridge-service/internal/telemetry"
+	otellog "go.opentelemetry.io/otel/log"
 )
 
 // Bridge connects AMQP (RabbitMQ) and MQTT (EMQX) brokers
@@ -139,6 +142,7 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 			case models.KindLocationUpdate:
 				locationUpdate := messageWithDelivery.LocationUpdate
 
+				ctx := context.Background()
 				topic, err := b.mqttClient.PublishDeviceTelemetry(locationUpdate)
 				if err != nil {
 					deviceId := locationUpdate.DeviceID
@@ -147,10 +151,20 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 					}
 
 					log.Printf("Failed to publish device telemetry for %s: %v", deviceId, err)
+					telemetry.LogError(ctx, fmt.Sprintf("Failed to publish device %s telemetry to MQTT", locationUpdate.DeviceEUI),
+						otellog.String("device_id", deviceId),
+						otellog.String("device_eui", locationUpdate.DeviceEUI),
+						otellog.String("error", err.Error()),
+					)
 					// NACK the message to requeue it
 					_ = b.amqpClient.NackMessage(delivery, true)
 				} else {
 					log.Printf("Successfully published telemetry to MQTT topic %s", topic)
+					telemetry.LogInfo(ctx, fmt.Sprintf("Successfully published device %s telemetry to MQTT topic %s", locationUpdate.DeviceEUI, topic),
+						otellog.String("device_id", locationUpdate.DeviceID),
+						otellog.String("device_eui", locationUpdate.DeviceEUI),
+						otellog.String("mqtt_topic", topic),
+					)
 					// ACK the message only after successful MQTT publish
 					_ = b.amqpClient.AckMessage(delivery)
 				}
@@ -158,15 +172,24 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 			case models.KindEntityTelemetry:
 				entityUpdate := messageWithDelivery.EntityUpdate
 
-				_, err := b.mqttClient.PublishEntityTelemetry(entityUpdate)
+				ctx := context.Background()
+				topic, err := b.mqttClient.PublishEntityTelemetry(entityUpdate)
 				if err != nil {
 					entityId := entityUpdate.Entity.UniqueID
 					if entityId == "" {
 						entityId = "unknown"
 					}
 					log.Printf("Failed to publish entity telemetry for %s: %v", entityId, err)
+					telemetry.LogError(ctx, fmt.Sprintf("Failed to publish entity %s telemetry to MQTT", entityId),
+						otellog.String("entity_id", entityId),
+						otellog.String("error", err.Error()),
+					)
 					_ = b.amqpClient.NackMessage(delivery, true)
 				} else {
+					telemetry.LogInfo(ctx, fmt.Sprintf("Successfully published entity %s telemetry to MQTT topic %s", entityUpdate.Entity.UniqueID, topic),
+						otellog.String("entity_id", entityUpdate.Entity.UniqueID),
+						otellog.String("mqtt_topic", topic),
+					)
 					_ = b.amqpClient.AckMessage(delivery)
 				}
 

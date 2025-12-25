@@ -15,7 +15,9 @@ import (
 	pool "github.com/Space-DF/broker-bridge-service/internal/amqp/vhostpool"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"github.com/Space-DF/broker-bridge-service/internal/models"
+	"github.com/Space-DF/broker-bridge-service/internal/telemetry"
 	amqp "github.com/rabbitmq/amqp091-go"
+	otellog "go.opentelemetry.io/otel/log"
 )
 
 // TenantConsumer represents a consumer for a specific tenant
@@ -107,8 +109,9 @@ func (c *Client) Start(ctx context.Context) error {
 }
 
 func (c *Client) handleMessage(msg amqp.Delivery) {
+	ctx := context.Background()
 	isEntityTelemetry := strings.Contains(msg.RoutingKey, ".entity.") && strings.HasSuffix(msg.RoutingKey, ".telemetry")
-	
+
 	if isEntityTelemetry {
 		var entityPayload models.EntityTelemetryPayload
 		if err := json.Unmarshal(msg.Body, &entityPayload); err == nil && entityPayload.Entity.UniqueID != "" {
@@ -118,11 +121,19 @@ func (c *Client) handleMessage(msg amqp.Delivery) {
 				Delivery:     &msg,
 			}
 
+			telemetry.LogInfo(ctx, fmt.Sprintf("Received entity telemetry for entity %s from routing key %s", entityPayload.Entity.UniqueID, msg.RoutingKey),
+				otellog.String("entity_id", entityPayload.Entity.UniqueID),
+				otellog.String("routing_key", msg.RoutingKey),
+			)
+
 			select {
 			case c.messagesChan <- messageWithDelivery:
 				// Successfully queued
 			default:
 				log.Printf("Message channel full, dropping entity telemetry for entity: %s", entityPayload.Entity.UniqueID)
+				telemetry.LogWarn(ctx, fmt.Sprintf("Message channel full, dropping entity telemetry for entity %s", entityPayload.Entity.UniqueID),
+					otellog.String("entity_id", entityPayload.Entity.UniqueID),
+				)
 				if !c.config.AutoAck {
 					_ = msg.Nack(false, true)
 				}
@@ -142,11 +153,20 @@ func (c *Client) handleMessage(msg amqp.Delivery) {
 			Delivery:       &msg,
 		}
 
+		telemetry.LogInfo(ctx, fmt.Sprintf("Received device location update for device %s from routing key %s", locationUpdate.DeviceEUI, msg.RoutingKey),
+			otellog.String("device_eui", locationUpdate.DeviceEUI),
+			otellog.String("device_id", locationUpdate.DeviceID),
+			otellog.String("routing_key", msg.RoutingKey),
+		)
+
 		select {
 		case c.messagesChan <- messageWithDelivery:
 			// Successfully queued
 		default:
 			log.Printf("Message channel full, dropping location update for device: %s", locationUpdate.DeviceEUI)
+			telemetry.LogWarn(ctx, fmt.Sprintf("Message channel full, dropping location update for device %s", locationUpdate.DeviceEUI),
+				otellog.String("device_eui", locationUpdate.DeviceEUI),
+			)
 			if !c.config.AutoAck {
 				_ = msg.Nack(false, true)
 			}
@@ -155,6 +175,9 @@ func (c *Client) handleMessage(msg amqp.Delivery) {
 	}
 
 	log.Printf("Error unmarshaling message into known types; dropping")
+	telemetry.LogError(ctx, fmt.Sprintf("Failed to unmarshal message from routing key %s into known types", msg.RoutingKey),
+		otellog.String("routing_key", msg.RoutingKey),
+	)
 	if !c.config.AutoAck {
 		_ = msg.Nack(false, false)
 	}

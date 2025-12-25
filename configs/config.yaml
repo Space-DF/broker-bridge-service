@@ -43,3 +43,9 @@ rate_limit:
   enabled: true
   requests_per_minute: 1000
   burst_size: 100
+
+# OpenTelemetry Configuration
+opentelemetry:
+  endpoint: "signoz-otel-collector:4317"
+  environment: "development"
+  sampling_ratio: 1.0
