@@ -169,7 +169,7 @@ func setDefaults(vp *viper.Viper) {
 	vp.SetDefault("rate_limit.burst_size", 100)
 
 	// OpenTelemetry defaults
-	vp.SetDefault("opentelemetry.enabled", true)
+	vp.SetDefault("opentelemetry.enabled", false)
 	vp.SetDefault("opentelemetry.endpoint", "signoz-otel-collector:4317")
 	vp.SetDefault("opentelemetry.environment", "development")
 	vp.SetDefault("opentelemetry.sampling_ratio", 1.0)
