@@ -51,8 +51,14 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	// Initialize OpenTelemetry tracing
-	cleanup := telemetry.InitTracing("broker-bridge-service", cfg.OpenTelemetry)
-	defer cleanup()
+	var cleanup func()
+	if cfg.OpenTelemetry.Enabled {
+		cleanup = telemetry.InitTracing("broker-bridge-service", cfg.OpenTelemetry)
+		defer cleanup()
+	} else {
+		cleanup = func() {}
+		defer cleanup()
+	}
 
 	// Create bridge instance
 	br := bridge.NewBridge(cfg)

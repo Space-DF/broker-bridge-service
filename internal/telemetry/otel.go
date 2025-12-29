@@ -23,6 +23,12 @@ var logger otellog.Logger
 
 // InitTracing initializes OpenTelemetry tracing for the service
 func InitTracing(serviceName string, cfg config.OpenTelemetryConfig) func() {
+	// Skip initialization if disabled
+	if !cfg.Enabled {
+		log.Printf("OpenTelemetry disabled for service: %s", serviceName)
+		return func() {}
+	}
+
 	ctx := context.Background()
 
 	otlpEndpoint := cfg.Endpoint
