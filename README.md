@@ -19,9 +19,45 @@ AMQP ←→ Broker Bridge Service ←→ EMQX MQTT
 
 ## Configuration
 
-- `configs/config.yaml` - Main configuration file
-- Environment variables override config file settings
-- `.env` file for local development
+### Configuration
+Create a `.env` file with the following example settings:
+
+```bash
+# Server Configuration
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8080
+SERVER_LOG_LEVEL=info
+
+# EMQX MQTT Configuration
+MQTT_BROKER=localhost
+MQTT_PORT=1883
+MQTT_CLIENT_ID=frontend-gateway-service
+MQTT_USERNAME=admin
+MQTT_PASSWORD=public
+MQTT_TOPICS=transformed/device/location,device/+/status
+MQTT_QOS=1
+
+# AMQP Configuration
+AMQP_BROKER_URL=amqp://guest:guest@localhost:5672/
+AMQP_EXCHANGE=
+AMQP_QUEUE=transformed/device/location
+AMQP_ROUTING_KEY=transformed/device/location
+AMQP_CONSUMER_TAG=broker-bridge-consumer
+AMQP_AUTO_ACK=false
+AMQP_EXCLUSIVE=false
+AMQP_NO_LOCAL=false
+AMQP_NO_WAIT=false
+
+# Rate Limiting
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_REQUESTS_PER_MINUTE=1000
+RATE_LIMIT_BURST_SIZE=100
+
+# CORS Configuration
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
+CORS_ALLOWED_METHODS=GET,POST,PUT,DELETE,OPTIONS
+CORS_ALLOWED_HEADERS=Origin,Content-Type,Accept,Authorization,X-Requested-With
+```
 
 ## Usage
 
@@ -59,3 +95,12 @@ make test
   golangci-lint run
   gosec ./...
   ```
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
+
+[![SpaceDF - A project from Digital Fortress](https://df.technology/images/SpaceDF.png)](https://df.technology/)

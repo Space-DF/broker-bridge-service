@@ -75,7 +75,7 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Setup HTTP server for health check endpoint
 	mux := http.NewServeMux()
-	
+
 	// Health check endpoint
 	mux.HandleFunc("/health", healthCheckHandler)
 
@@ -111,14 +111,14 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Graceful shutdown
 	log.Println("Shutting down...")
-	
+
 	// Cancel context to stop bridge
 	cancel()
 
 	// Shutdown HTTP server
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
-	
+
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("HTTP server shutdown error: %v", err)
 	}
@@ -135,13 +135,12 @@ func runServer(cmd *cobra.Command, args []string) {
 func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	
+
 	response := `{
 		"status": "healthy",
 		"service": "broker-bridge-service",
 		"timestamp": "` + time.Now().UTC().Format(time.RFC3339) + `"
 	}`
-	
+
 	_, _ = w.Write([]byte(response))
 }
-
