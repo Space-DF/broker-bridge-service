@@ -11,12 +11,12 @@ import (
 )
 
 type Config struct {
-	Server         ServerConfig         `mapstructure:"server"`
-	MQTT           MQTTConfig           `mapstructure:"mqtt"`
-	AMQP           AMQPConfig           `mapstructure:"amqp"`
-	OrgEvents      OrgEventsConfig      `mapstructure:"org_events"`
-	RateLimit      RateLimitConfig      `mapstructure:"rate_limit"`
-	OpenTelemetry  OpenTelemetryConfig  `mapstructure:"opentelemetry"`
+	Server        ServerConfig        `mapstructure:"server"`
+	MQTT          MQTTConfig          `mapstructure:"mqtt"`
+	AMQP          AMQPConfig          `mapstructure:"amqp"`
+	OrgEvents     OrgEventsConfig     `mapstructure:"org_events"`
+	RateLimit     RateLimitConfig     `mapstructure:"rate_limit"`
+	OpenTelemetry OpenTelemetryConfig `mapstructure:"opentelemetry"`
 }
 
 type ServerConfig struct {
