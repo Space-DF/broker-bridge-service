@@ -1,0 +1,51 @@
+# Server Configuration
+server:
+  host: "0.0.0.0"
+  port: 8080
+  log_level: "info"
+  read_timeout: "30s"
+  write_timeout: "30s"
+
+# EMQX MQTT Configuration
+mqtt:
+  broker: "localhost"
+  port: 1883
+  client_id: "broker-bridge-service"
+  username: "admin"
+  password: "public"
+  topics:
+    - "tenant/+/transformed/device/location"
+    - "device/+/status"
+  qos: 1
+  clean_session: true
+  keep_alive: 60
+  connect_timeout: "10s"
+  reconnect_delay: "5s"
+
+# AMQP Configuration
+amqp:
+  url: "amqp://guest:guest@localhost:5672/"
+  allowed_vhosts: []
+  auto_ack: false
+  exclusive: false
+  no_local: false
+  no_wait: false
+
+# Organization Events Configuration
+org_events:
+  exchange: "org.events"
+  queue: "broker-bridge.org.events.queue"
+  routing_key: "org.#"
+  consumer_tag: "broker-bridge-org-events"
+
+# Rate Limiting Configuration
+rate_limit:
+  enabled: true
+  requests_per_minute: 1000
+  burst_size: 100
+
+# OpenTelemetry Configuration
+opentelemetry:
+  endpoint: "signoz-otel-collector:4317"
+  environment: "development"
+  sampling_ratio: 1.0
