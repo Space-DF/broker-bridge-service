@@ -103,4 +103,8 @@ make test
 4. Add tests
 5. Submit a pull request
 
+## License
+Licensed under the Apache License, Version 2.0  
+See the LICENSE file for details.
+
 [![SpaceDF - A project from Digital Fortress](https://df.technology/images/SpaceDF.png)](https://df.technology/)
