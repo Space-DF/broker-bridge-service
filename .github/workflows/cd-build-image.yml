@@ -6,6 +6,7 @@ on:
 
 jobs:
   deploy:
+    if: github.event.release.target_commitish == 'main'
     name: Build & Deploy spacedf-backend Docker Image
     runs-on: ubuntu-latest
 
