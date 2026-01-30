@@ -1,13 +1,13 @@
 name: Build & Publish Docker Image
 
 on:
+  push:
+    branches: ["dev", "main"]
   release:
     types: [published]
 
 jobs:
-  deploy:
-    if: github.event.release.target_commitish == 'main'
-    name: Build & Deploy spacedf-backend Docker Image
+  build:
     runs-on: ubuntu-latest
 
     permissions:
@@ -18,7 +18,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event_name == 'release' && 'main' || github.ref }}
 
       # Enable multi-arch
       - name: Set up QEMU
@@ -36,18 +36,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Generate Docker metadata
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name }}
-            type=semver,pattern={{major}},value=${{ github.event.release.tag_name }}
+      - name: Set build variables
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION=${{ github.event.release.tag_name }}
+            VERSION=${VERSION#v}
+            echo "TAGS=ghcr.io/${{ github.repository }}:${VERSION},ghcr.io/${{ github.repository }}:latest" >> $GITHUB_OUTPUT
 
-      # Build & Push image
+          elif [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "TAGS=ghcr.io/${{ github.repository }}:prod" >> $GITHUB_OUTPUT
+
+          else
+            echo "TAGS=ghcr.io/${{ github.repository }}:dev" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build & Push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -55,7 +58,4 @@ jobs:
           file: ./Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          secrets: |
-            GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          tags: ${{ steps.vars.outputs.TAGS }}
