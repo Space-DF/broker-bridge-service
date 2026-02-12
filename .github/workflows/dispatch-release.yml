@@ -1,0 +1,33 @@
+name: Dispatch Release & Deploy to PROD
+on:
+  repository_dispatch:
+    types:
+      - release-broker-bridge-service
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Client payload
+        run: |
+          cat <<'EOF'
+          ${{ toJson(github.event.client_payload) }}
+          EOF
+
+      - name: Release
+        if: ${{ github.event.client_payload.release_target_commitish == 'main' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.client_payload.release_tag }}
+          generate_release_notes: true
+          target_commitish: 'main'
+
+  deploy-prod:
+    uses: ./.github/workflows/cd-prod.yml
+    needs: [create-release]
+    with:
+      tag_name: ${{ github.event.client_payload.release_tag }}
+      target_commitish: ${{ github.event.client_payload.release_target_commitish }}
