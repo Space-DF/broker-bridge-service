@@ -1,25 +1,13 @@
-name: Build & Deploy to PROD
+name: Publish Docker Image
 
 on:
   release:
     types: [published]
     branches: [main]
 
-  workflow_call:
-    inputs:
-      tag_name:
-        description: Docker image tag / Release tag
-        required: true
-        type: string
-      target_commitish:
-        description: Branch to build from
-        required: true
-        type: string
-
 jobs:
   deploy:
-    if: ${{ inputs.target_commitish == 'main' || github.event.release.target_commitish == 'main' }}
-    name: Build & Deploy
+    name: Build & Push Docker Image
     runs-on: ubuntu-latest
 
     permissions:
@@ -27,7 +15,7 @@ jobs:
       packages: write
 
     env:
-      RELEASE_TAG: ${{ inputs.tag_name || github.event.release.tag_name }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
 
     steps:
       - name: Checkout code
@@ -49,7 +37,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate Docker metadata
+      - name: Generate Docker Metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -57,7 +45,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
 
-      - name: Build & Push Docker image
+      - name: Build & Push Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
