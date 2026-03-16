@@ -30,10 +30,10 @@ func NewBridge(cfg config.Config) *Bridge {
 	// Create Celery publisher for dispatching location updates to device-service.
 	// Uses the same default-vhost AMQP URL.
 	var cp *celery.Publisher
-	if pub, err := celery.NewPublisher(cfg.AMQP.URL); err != nil {
+	cp, err := celery.NewPublisher(cfg.AMQP.URL)
+
+	if err != nil {
 		log.Printf("Warning: failed to create Celery publisher: %v (location updates to device-service disabled)", err)
-	} else {
-		cp = pub
 	}
 
 	return &Bridge{
