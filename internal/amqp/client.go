@@ -306,7 +306,7 @@ func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, qu
 		return fmt.Errorf("failed to start consuming for org %s in vhost %s: %w", orgSlug, vhost, err)
 	}
 
-	tenantCtx, cancel := context.WithCancel(ctx)
+	tenantCtx, cancel := context.WithCancel(ctx) // #nosec G118
 
 	tenantConsumer := &TenantConsumer{
 		OrgSlug:     orgSlug,
