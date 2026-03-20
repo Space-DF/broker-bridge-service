@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/Space-DF/broker-bridge-service/internal/amqp"
+	"github.com/Space-DF/broker-bridge-service/internal/celery"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"github.com/Space-DF/broker-bridge-service/internal/models"
 	"github.com/Space-DF/broker-bridge-service/internal/mqtt"
@@ -16,20 +17,31 @@ import (
 
 // Bridge connects AMQP (RabbitMQ) and MQTT (EMQX) brokers
 type Bridge struct {
-	config     config.Config
-	mqttClient *mqtt.Client
-	amqpClient *amqp.Client
-	done       chan bool
-	stopOnce   sync.Once
+	config          config.Config
+	mqttClient      *mqtt.Client
+	amqpClient      *amqp.Client
+	celeryPublisher *celery.Publisher
+	done            chan bool
+	stopOnce        sync.Once
 }
 
 // NewBridge creates a new bridge instance
 func NewBridge(cfg config.Config) *Bridge {
+	// Create Celery publisher for dispatching location updates to device-service.
+	// Uses the same default-vhost AMQP URL.
+	var cp *celery.Publisher
+	cp, err := celery.NewPublisher(cfg.AMQP.URL)
+
+	if err != nil {
+		log.Printf("Warning: failed to create Celery publisher: %v (location updates to device-service disabled)", err)
+	}
+
 	return &Bridge{
-		config:     cfg,
-		mqttClient: mqtt.NewClient(cfg.MQTT),
-		amqpClient: amqp.NewClient(cfg.AMQP, cfg.OrgEvents),
-		done:       make(chan bool),
+		config:          cfg,
+		mqttClient:      mqtt.NewClient(cfg.MQTT),
+		amqpClient:      amqp.NewClient(cfg.AMQP, cfg.OrgEvents),
+		celeryPublisher: cp,
+		done:            make(chan bool),
 	}
 }
 
@@ -112,6 +124,10 @@ func (b *Bridge) Stop() error {
 		}
 	}
 
+	if b.celeryPublisher != nil {
+		b.celeryPublisher.Close()
+	}
+
 	log.Println("Broker bridge service stopped")
 	return nil
 }
@@ -142,7 +158,6 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 			case models.KindLocationUpdate:
 				locationUpdate := messageWithDelivery.LocationUpdate
 
-				ctx := context.Background()
 				topic, err := b.mqttClient.PublishDeviceTelemetry(locationUpdate)
 				if err != nil {
 					deviceId := locationUpdate.DeviceID
@@ -165,6 +180,25 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 						otellog.String("device_eui", locationUpdate.DeviceEUI),
 						otellog.String("mqtt_topic", topic),
 					)
+
+					// Dispatch Celery task to device-service to update device location in DB
+					if b.celeryPublisher != nil && locationUpdate.DeviceID != "" && locationUpdate.DeviceID != "unknown" {
+						org := locationUpdate.Organization
+						if org == "" {
+							org = "unknown"
+						}
+						if pubErr := b.celeryPublisher.PublishLocationUpdate(
+							org,
+							locationUpdate.DeviceID,
+							locationUpdate.Location.Latitude,
+							locationUpdate.Location.Longitude,
+						); pubErr != nil {
+							log.Printf("Failed to dispatch Celery location update for device %s: %v", locationUpdate.DeviceID, pubErr)
+						} else {
+							log.Printf("Dispatched Celery location update for device %s (org: %s)", locationUpdate.DeviceID, org)
+						}
+					}
+
 					// ACK the message only after successful MQTT publish
 					_ = b.amqpClient.AckMessage(delivery)
 				}
@@ -172,7 +206,6 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 			case models.KindEntityTelemetry:
 				entityUpdate := messageWithDelivery.EntityUpdate
 
-				ctx := context.Background()
 				topic, err := b.mqttClient.PublishEntityTelemetry(entityUpdate)
 				if err != nil {
 					entityId := entityUpdate.Entity.UniqueID
