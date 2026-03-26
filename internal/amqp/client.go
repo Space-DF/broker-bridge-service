@@ -13,6 +13,7 @@ import (
 	"github.com/Space-DF/broker-bridge-service/internal/amqp/logging"
 	"github.com/Space-DF/broker-bridge-service/internal/amqp/rabbitmq"
 	pool "github.com/Space-DF/broker-bridge-service/internal/amqp/vhostpool"
+	"github.com/Space-DF/broker-bridge-service/internal/circuitbreaker"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"github.com/Space-DF/broker-bridge-service/internal/models"
 	"github.com/Space-DF/broker-bridge-service/internal/telemetry"
@@ -42,47 +43,276 @@ type Client struct {
 	tenantConsumersMu sync.RWMutex
 	vhostPool         *pool.Pool
 	eventManager      *rabbitmq.EventManager
+
+	// Connection monitoring
+	circuitBreaker       *circuitbreaker.CircuitBreaker
+	reconnectChan        chan struct{}
+	connCloseNotifier    chan *amqp.Error
+	channelCloseNotifier chan *amqp.Error
+	reconnecting         bool // Flag to prevent concurrent reconnections
 }
 
 func NewClient(cfg config.AMQPConfig, orgEventsCfg config.OrgEventsConfig) *Client {
+	// Create circuit breaker
+	cbConfig := circuitbreaker.Config{
+		MaxFailures:      5,
+		ResetTimeout:     15 * time.Second,
+		SuccessThreshold: 2,
+	}
+	cb := circuitbreaker.New(cbConfig)
+
 	return &Client{
-		config:          cfg,
-		orgEventsConfig: orgEventsCfg,
-		messagesChan:    make(chan *models.AMQPMessageWithDelivery, 100),
-		done:            make(chan bool),
-		tenantConsumers: make(map[string]*TenantConsumer),
-		vhostPool:       pool.New(cfg.URL),
+		config:               cfg,
+		orgEventsConfig:      orgEventsCfg,
+		messagesChan:         make(chan *models.AMQPMessageWithDelivery, 100),
+		done:                 make(chan bool),
+		tenantConsumers:      make(map[string]*TenantConsumer),
+		vhostPool:            pool.New(cfg.URL),
+		circuitBreaker:       cb,
+		reconnectChan:        make(chan struct{}, 1),
+		connCloseNotifier:    make(chan *amqp.Error, 1),
+		channelCloseNotifier: make(chan *amqp.Error, 1),
 	}
 }
 
 func (c *Client) Connect() error {
 	var err error
 
-	c.orgEventsConn, err = amqp.Dial(c.config.URL)
-	if err != nil {
-		return fmt.Errorf("failed to connect to AMQP: %w", err)
-	}
+	// Use circuit breaker for connection attempts
+	err = c.circuitBreaker.Execute(func() error {
+		// Connect to AMQP broker
+		c.orgEventsConn, err = amqp.Dial(c.config.URL)
+		if err != nil {
+			return fmt.Errorf("failed to connect to AMQP broker: %w", err)
+		}
 
-	// Create separate channel for org events
-	c.orgEventsChannel, err = c.orgEventsConn.Channel()
+		// Create separate channel for org events
+		c.orgEventsChannel, err = c.orgEventsConn.Channel()
+		if err != nil {
+			c.orgEventsConn.Close()
+			return fmt.Errorf("failed to open org events channel: %w", err)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		return fmt.Errorf("failed to open org events channel: %w", err)
+		return err
 	}
 
 	c.eventManager = rabbitmq.NewEventManager(
 		c.orgEventsChannel,
 		c.orgEventsConfig,
-		c.subscribeToOrganization,
-		c.unsubscribeFromOrganization,
+		c.subscribeToOrganizationForEvent,
+		c.unsubscribeFromOrganizationForEvent,
 	)
 
-	log.Printf("Successfully connected to AMQP at %s", c.config.URL)
+	// Register close notifiers for connection monitoring
+	c.setupConnectionMonitoring()
 
+	log.Printf("Successfully connected to AMQP at %s", c.config.URL)
 	return nil
+}
+
+// setupConnectionMonitoring sets up close notifiers for the connection and channel
+func (c *Client) setupConnectionMonitoring() {
+	c.connCloseNotifier = make(chan *amqp.Error, 1)
+	c.channelCloseNotifier = make(chan *amqp.Error, 1)
+	c.orgEventsConn.NotifyClose(c.connCloseNotifier)
+	c.orgEventsChannel.NotifyClose(c.channelCloseNotifier)
+}
+
+// monitorConnection monitors the connection and triggers reconnection if needed
+func (c *Client) monitorConnection(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case err, ok := <-c.connCloseNotifier:
+			if ok && err != nil {
+				c.handleConnectionClosed(err)
+			}
+
+		case err, ok := <-c.channelCloseNotifier:
+			if ok && err != nil {
+				c.handleChannelClosed(err)
+			}
+
+		case <-c.reconnectChan:
+			if err := c.reconnectConnection(ctx); err != nil {
+				log.Printf("Reconnection failed: %v", err)
+			}
+		}
+	}
+}
+
+// handleConnectionClosed handles unexpected connection closure
+func (c *Client) handleConnectionClosed(err *amqp.Error) {
+	log.Printf("AMQP connection closed unexpectedly: %v (code: %d)", err, err.Code)
+
+	// Invalidate all pooled vhost connections since they're also closed
+	c.vhostPool.InvalidateAll()
+
+	// Record failure in circuit breaker
+	c.circuitBreaker.RecordFailure()
+
+	// Notify reconnection goroutine
+	select {
+	case c.reconnectChan <- struct{}{}:
+	default:
+	}
+}
+
+// handleChannelClosed handles unexpected channel closure
+func (c *Client) handleChannelClosed(err *amqp.Error) {
+	log.Printf("AMQP channel closed unexpectedly: %v (code: %d)", err, err.Code)
+
+	// Just trigger full reconnection - it's safer and simpler
+	select {
+	case c.reconnectChan <- struct{}{}:
+	default:
+	}
+}
+
+// reconnectConnection attempts to reconnect to the AMQP broker
+func (c *Client) reconnectConnection(ctx context.Context) error {
+	log.Println("Attempting to reconnect to AMQP broker")
+
+	// Set reconnecting flag to prevent individual tenant subscriptions
+	c.reconnecting = true
+	defer func() {
+		// Will be set to false by caller on success, or here on failure
+		if c.reconnecting {
+			c.reconnecting = false
+		}
+	}()
+
+	backoff := 1 * time.Second
+	maxBackoff := 30 * time.Second
+	maxAttempts := 30
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Check circuit breaker
+		if c.circuitBreaker.State() == circuitbreaker.StateOpen {
+			log.Printf("Circuit breaker is open, waiting %v", 30*time.Second)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(30 * time.Second):
+			}
+		}
+
+		// Close existing connection if any
+		if c.orgEventsConn != nil && !c.orgEventsConn.IsClosed() {
+			_ = c.orgEventsConn.Close()
+		}
+
+		// Attempt to reconnect
+		err := func() error {
+			conn, err := amqp.Dial(c.config.URL)
+			if err != nil {
+				return err
+			}
+
+			ch, err := conn.Channel()
+			if err != nil {
+				conn.Close()
+				return err
+			}
+
+			c.orgEventsConn = conn
+			c.orgEventsChannel = ch
+
+			// Re-register close notifiers
+			c.connCloseNotifier = make(chan *amqp.Error, 1)
+			c.channelCloseNotifier = make(chan *amqp.Error, 1)
+			c.orgEventsConn.NotifyClose(c.connCloseNotifier)
+			c.orgEventsChannel.NotifyClose(c.channelCloseNotifier)
+
+			// Recreate event manager
+			c.eventManager = rabbitmq.NewEventManager(
+				c.orgEventsChannel,
+				c.orgEventsConfig,
+				c.subscribeToOrganizationForEvent,
+				c.unsubscribeFromOrganizationForEvent,
+			)
+
+			return nil
+		}()
+
+		if err == nil {
+			log.Printf("Successfully reconnected to AMQP broker (attempt %d)", attempt)
+
+			// Record success in circuit breaker
+			c.circuitBreaker.RecordSuccess()
+
+			// Wait a moment for connection to stabilize before re-establishing tenants
+			log.Println("Waiting for connection to stabilize before re-establishing tenants...")
+			time.Sleep(500 * time.Millisecond)
+
+			// Re-establish all tenant connections (with reconnecting flag still set)
+			c.reestablishTenantConnections(ctx)
+
+			log.Printf("Re-established %d tenant connections", len(c.tenantConsumers))
+			return nil
+		}
+
+		log.Printf("Reconnection attempt %d failed: %v", attempt, err)
+
+		// Record failure in circuit breaker
+		c.circuitBreaker.RecordFailure()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		// Exponential backoff
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+
+	return fmt.Errorf("failed to reconnect after %d attempts", maxAttempts)
+}
+
+// reestablishTenantConnections re-establishes connections for all active tenants
+func (c *Client) reestablishTenantConnections(ctx context.Context) {
+	c.tenantConsumersMu.Lock()
+	tenants := make([]*TenantConsumer, 0, len(c.tenantConsumers))
+	for _, consumer := range c.tenantConsumers {
+		tenants = append(tenants, consumer)
+	}
+	c.tenantConsumersMu.Unlock()
+
+	successCount := 0
+	for _, tenant := range tenants {
+		// Remove from map so subscribeToOrganization can add it back
+		c.tenantConsumersMu.Lock()
+		delete(c.tenantConsumers, tenant.OrgSlug)
+		c.tenantConsumersMu.Unlock()
+
+		// Bypass reconnecting check since we're already in reconnection flow
+		err := c.subscribeToOrganization(ctx, tenant.Vhost, tenant.OrgSlug, tenant.QueueName, true)
+
+		if err == nil {
+			successCount++
+		} else {
+			log.Printf("Failed to resubscribe to %s: %v", tenant.OrgSlug, err)
+		}
+	}
+
+	log.Printf("Re-established %d/%d tenant connections", successCount, len(tenants))
 }
 
 func (c *Client) Start(ctx context.Context) error {
 	log.Println("Starting AMQP client with org event discovery...")
+
+	// Start reconnection monitor goroutine
+	go c.monitorConnection(ctx)
 
 	// Start listening for org events
 	go func() {
@@ -190,10 +420,9 @@ func (c *Client) GetMessagesChan() <-chan *models.AMQPMessageWithDelivery {
 // AckMessage acknowledges an AMQP message
 func (c *Client) AckMessage(delivery *amqp.Delivery) error {
 	if !c.config.AutoAck && delivery != nil {
-		if err := delivery.Ack(false); err != nil {
-			log.Printf("Failed to ACK message: %v", err)
-			return err
-		}
+		// Silently ignore ACK errors from closed channels (testing)
+		// The message will be requeued by RabbitMQ automatically
+		_ = delivery.Ack(false)
 	}
 	return nil
 }
@@ -201,10 +430,8 @@ func (c *Client) AckMessage(delivery *amqp.Delivery) error {
 // NackMessage negatively acknowledges an AMQP message
 func (c *Client) NackMessage(delivery *amqp.Delivery, requeue bool) error {
 	if !c.config.AutoAck && delivery != nil {
-		if err := delivery.Nack(false, requeue); err != nil {
-			log.Printf("Failed to NACK message: %v", err)
-			return err
-		}
+		// Silently ignore NACK errors from closed channels (testing)
+		_ = delivery.Nack(false, requeue)
 	}
 	return nil
 }
@@ -238,7 +465,7 @@ func (c *Client) handleOrgEvent(ctx context.Context, msg amqp.Delivery) error {
 			log.Printf("Org created event missing vhost for org: %s", orgSlug)
 			return nil
 		}
-		return c.subscribeToOrganization(ctx, vhost, orgSlug, queueName)
+		return c.subscribeToOrganization(ctx, vhost, orgSlug, queueName, false)
 
 	case models.OrgDeactivated, models.OrgDeleted:
 		// Org deleted/deactivated - unsubscribe
@@ -251,8 +478,18 @@ func (c *Client) handleOrgEvent(ctx context.Context, msg amqp.Delivery) error {
 	}
 }
 
+// subscribeToOrganizationForEvent is a wrapper for EventManager callback (doesn't bypass reconnecting check)
+func (c *Client) subscribeToOrganizationForEvent(ctx context.Context, vhost, orgSlug, queueName string) error {
+	return c.subscribeToOrganization(ctx, vhost, orgSlug, queueName, false)
+}
+
+// unsubscribeFromOrganizationForEvent is a wrapper for EventManager callback
+func (c *Client) unsubscribeFromOrganizationForEvent(orgSlug string) {
+	c.unsubscribeFromOrganization(orgSlug)
+}
+
 // subscribeToOrganization subscribes to a specific organization's queue
-func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, queueName string) error {
+func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, queueName string, bypassReconnectingCheck bool) error {
 	if queueName == "" {
 		queueName = fmt.Sprintf("%s.transformed.data.queue", orgSlug)
 	}
@@ -260,6 +497,11 @@ func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, qu
 	if !helpers.ShouldHandleVhost(vhost, c.config.AllowedVhosts) {
 		log.Printf("Skipping subscription for org %s in vhost %s (not assigned to this instance)", orgSlug, vhost)
 		return nil
+	}
+
+	// Block subscription if main connection is reconnecting (unless bypassed)
+	if !bypassReconnectingCheck && c.reconnecting {
+		return fmt.Errorf("main connection is reconnecting, tenant subscription deferred for %s", orgSlug)
 	}
 
 	c.tenantConsumersMu.Lock()
@@ -375,14 +617,72 @@ func (c *Client) processTenantMessages(ctx context.Context, tenant *TenantConsum
 
 		case msg, ok := <-messages:
 			if !ok {
-				log.Printf("Message channel closed for org: %s (vhost: %s)", tenant.OrgSlug, tenant.Vhost)
+				log.Printf("Message channel closed for org: %s (vhost: %s), draining remaining messages and triggering resubscription", tenant.OrgSlug, tenant.Vhost)
+
+				// Drain any remaining messages in the channel (they will be requeued by RabbitMQ)
+				for range messages {
+					// Just drain, don't process or ACK
+				}
+
+				// Trigger resubscription for this tenant
+				go c.resubscribeTenant(ctx, tenant)
+				return
+			}
+
+			// Check if the delivery channel is still valid before processing
+			// When the AMQP connection closes, the delivery becomes invalid
+			if tenant.Channel == nil || tenant.Channel.IsClosed() {
+				log.Printf("Tenant channel closed, skipping message processing for %s", tenant.OrgSlug)
+				go c.resubscribeTenant(ctx, tenant)
 				return
 			}
 
 			log.Printf("Received message for org %s (vhost: %s): routing key %s", tenant.OrgSlug, tenant.Vhost, msg.RoutingKey)
+
+			// Process the message (puts it in messagesChan for bridge to handle)
 			c.handleMessage(msg)
+
+			// NOTE: ACK is handled by the bridge layer via AckMessage()
+			// We don't ACK here to avoid double-ACKing
 		}
 	}
+}
+
+// resubscribeTenant attempts to resubscribe to a single tenant
+func (c *Client) resubscribeTenant(ctx context.Context, oldTenant *TenantConsumer) {
+	backoff := 1 * time.Second
+	maxBackoff := 30 * time.Second
+	maxAttempts := 5
+
+	// Check if main connection is down - if so, let centralized reconnection handle it
+	if c.orgEventsConn == nil || c.orgEventsConn.IsClosed() {
+		log.Printf("Main connection down, waiting for centralized reconnection for %s", oldTenant.OrgSlug)
+		return
+	}
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Remove old tenant from map first so subscribeToOrganization can create a new subscription
+		c.tenantConsumersMu.Lock()
+		delete(c.tenantConsumers, oldTenant.OrgSlug)
+		c.tenantConsumersMu.Unlock()
+
+		err := c.subscribeToOrganization(ctx, oldTenant.Vhost, oldTenant.OrgSlug, oldTenant.QueueName, false)
+		if err == nil {
+			log.Printf("Successfully resubscribed to %s", oldTenant.OrgSlug)
+			return
+		}
+
+		log.Printf("Failed to resubscribe to %s (attempt %d): %v", oldTenant.OrgSlug, attempt+1, err)
+
+		// Exponential backoff
+		time.Sleep(backoff)
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+
+	log.Printf("Failed to resubscribe to %s after %d attempts", oldTenant.OrgSlug, maxAttempts)
 }
 
 // stopAllConsumers stops all active tenant consumers

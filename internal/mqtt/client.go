@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Space-DF/broker-bridge-service/internal/config"
@@ -19,6 +20,8 @@ type Client struct {
 	client       mqtt.Client
 	messagesChan chan *models.DeviceMessage
 	done         chan bool
+	subscribed   bool
+	subscribeMu  sync.Mutex
 }
 
 // NewClient creates a new MQTT client
@@ -62,11 +65,8 @@ func (c *Client) Connect() error {
 // Start begins consuming messages from EMQX
 func (c *Client) Start(ctx context.Context) error {
 	// Subscribe to configured topics
-	for _, topic := range c.config.Topics {
-		if token := c.client.Subscribe(topic, c.config.QoS, c.messageHandler); token.Wait() && token.Error() != nil {
-			return fmt.Errorf("failed to subscribe to topic %s: %w", topic, token.Error())
-		}
-		log.Printf("Subscribed to topic: %s", topic)
+	if err := c.subscribeTopics(); err != nil {
+		return err
 	}
 
 	// Wait for context cancellation or done signal
@@ -80,6 +80,22 @@ func (c *Client) Start(ctx context.Context) error {
 	return nil
 }
 
+// subscribeTopics subscribes to all configured topics
+func (c *Client) subscribeTopics() error {
+	c.subscribeMu.Lock()
+	defer c.subscribeMu.Unlock()
+
+	for _, topic := range c.config.Topics {
+		if token := c.client.Subscribe(topic, c.config.QoS, c.messageHandler); token.Wait() && token.Error() != nil {
+			return fmt.Errorf("failed to subscribe to topic %s: %w", topic, token.Error())
+		}
+		log.Printf("Subscribed to topic: %s", topic)
+	}
+
+	c.subscribed = true
+	return nil
+}
+
 // GetMessagesChan returns the channel for receiving messages
 func (c *Client) GetMessagesChan() <-chan *models.DeviceMessage {
 	return c.messagesChan
@@ -88,6 +104,10 @@ func (c *Client) GetMessagesChan() <-chan *models.DeviceMessage {
 // Stop gracefully stops the MQTT client
 func (c *Client) Stop() error {
 	close(c.done)
+
+	c.subscribeMu.Lock()
+	c.subscribed = false
+	c.subscribeMu.Unlock()
 
 	if c.client != nil && c.client.IsConnected() {
 		// Unsubscribe from all topics
@@ -132,10 +152,29 @@ func (c *Client) messageHandler(client mqtt.Client, msg mqtt.Message) {
 // Connection event handlers
 func (c *Client) onConnect(client mqtt.Client) {
 	log.Println("Connected to EMQX broker")
+
+	// Restore subscriptions after reconnection
+	c.subscribeMu.Lock()
+	wasSubscribed := c.subscribed
+	c.subscribeMu.Unlock()
+
+	if wasSubscribed {
+		log.Println("Restoring MQTT subscriptions after reconnection...")
+		if err := c.subscribeTopics(); err != nil {
+			log.Printf("Failed to restore subscriptions: %v", err)
+		} else {
+			log.Println("Successfully restored MQTT subscriptions")
+		}
+	}
 }
 
 func (c *Client) onConnectionLost(client mqtt.Client, err error) {
 	log.Printf("Connection to EMQX lost: %v", err)
+
+	// Mark as unsubscribed so onConnect will restore subscriptions
+	c.subscribeMu.Lock()
+	c.subscribed = false
+	c.subscribeMu.Unlock()
 }
 
 func (c *Client) onReconnecting(client mqtt.Client, opts *mqtt.ClientOptions) {
