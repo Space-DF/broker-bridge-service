@@ -56,7 +56,7 @@ func NewClient(cfg config.AMQPConfig, orgEventsCfg config.OrgEventsConfig) *Clie
 	// Create circuit breaker
 	cbConfig := circuitbreaker.Config{
 		MaxFailures:      5,
-		ResetTimeout:     15 * time.Second,
+		ResetTimeout:     30 * time.Second,
 		SuccessThreshold: 2,
 	}
 	cb := circuitbreaker.New(cbConfig)
@@ -89,7 +89,11 @@ func (c *Client) Connect() error {
 		// Create separate channel for org events
 		c.orgEventsChannel, err = c.orgEventsConn.Channel()
 		if err != nil {
-			c.orgEventsConn.Close()
+			defer func() {
+				if err = c.orgEventsConn.Close(); err != nil {
+					log.Printf("Failed to close AMQP connection: %v", err)
+				}
+			}()
 			return fmt.Errorf("failed to open org events channel: %w", err)
 		}
 
@@ -217,7 +221,10 @@ func (c *Client) reconnectConnection(ctx context.Context) error {
 
 			ch, err := conn.Channel()
 			if err != nil {
-				conn.Close()
+				if err := conn.Close(); err != nil {
+					log.Printf("Failed to close AMQP connection: %v", err)
+				}
+
 				return err
 			}
 

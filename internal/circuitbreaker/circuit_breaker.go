@@ -10,9 +10,9 @@ import (
 type State int
 
 const (
-	StateClosed State = iota // Circuit is closed, requests pass through
-	StateHalfOpen            // Circuit is half-open, testing if service recovered
-	StateOpen                // Circuit is open, requests fail fast
+	StateClosed   State = iota // Circuit is closed, requests pass through
+	StateHalfOpen              // Circuit is half-open, testing if service recovered
+	StateOpen                  // Circuit is open, requests fail fast
 )
 
 func (s State) String() string {
@@ -50,9 +50,9 @@ func DefaultConfig() Config {
 
 // CircuitBreaker implements the circuit breaker pattern
 type CircuitBreaker struct {
-	config  Config
-	state   State
-	mu      sync.RWMutex
+	config Config
+	state  State
+	mu     sync.RWMutex
 
 	// Failure tracking
 	consecutiveFailures  int
