@@ -29,17 +29,17 @@ var (
 )
 
 // messageKindFromRoutingKey determines the message type from the routing key.
-// Pure function with no side effects - easy to test and reason about.
 func messageKindFromRoutingKey(routingKey string) models.MessageKind {
 	// Order matters: check more specific patterns first
+	// Specify by suffix to allow for flexible routing keys while still categorizing correctly
 	switch {
 	case strings.HasSuffix(routingKey, ".event"):
 		// Matches: tenant.{org}.space.{space}.device.{device_id}.event
 		return models.KindEvent
-	case strings.Contains(routingKey, ".entity.") && strings.HasSuffix(routingKey, ".telemetry"):
+	case strings.HasSuffix(routingKey, ".telemetry"):
 		// Matches: tenant.{org}.space.{space}.entity.{entity_id}_{type}.telemetry
 		return models.KindEntityTelemetry
-	case strings.HasSuffix(routingKey, ".location") || strings.Contains(routingKey, ".transformed.device."):
+	case strings.HasSuffix(routingKey, ".location"):
 		// Matches: tenant.{org}.space.{space}.device.{device_id}.location
 		return models.KindLocationUpdate
 	default:
@@ -49,7 +49,7 @@ func messageKindFromRoutingKey(routingKey string) models.MessageKind {
 	}
 }
 
-// HandlerRegistry manages message handlers with O(1) map-based routing.
+// HandlerRegistry manages message handlers routing.
 type HandlerRegistry struct {
 	handlers map[models.MessageKind]messageHandler
 }
