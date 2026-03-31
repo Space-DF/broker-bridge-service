@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,9 +15,7 @@ import (
 	"github.com/Space-DF/broker-bridge-service/internal/circuitbreaker"
 	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"github.com/Space-DF/broker-bridge-service/internal/models"
-	"github.com/Space-DF/broker-bridge-service/internal/telemetry"
 	amqp "github.com/rabbitmq/amqp091-go"
-	otellog "go.opentelemetry.io/otel/log"
 )
 
 // TenantConsumer represents a consumer for a specific tenant
@@ -43,6 +40,7 @@ type Client struct {
 	tenantConsumersMu sync.RWMutex
 	vhostPool         *pool.Pool
 	eventManager      *rabbitmq.EventManager
+	handlerRegistry   *HandlerRegistry
 
 	// Connection monitoring
 	circuitBreaker       *circuitbreaker.CircuitBreaker
@@ -72,6 +70,7 @@ func NewClient(cfg config.AMQPConfig, orgEventsCfg config.OrgEventsConfig) *Clie
 		reconnectChan:        make(chan struct{}, 1),
 		connCloseNotifier:    make(chan *amqp.Error, 1),
 		channelCloseNotifier: make(chan *amqp.Error, 1),
+		handlerRegistry:      NewHandlerRegistry(),
 	}
 }
 
@@ -144,8 +143,27 @@ func (c *Client) monitorConnection(ctx context.Context) {
 			}
 
 		case <-c.reconnectChan:
+			// Check if already reconnecting to prevent concurrent reconnections
+			if c.reconnecting {
+				log.Println("Already reconnecting, skipping duplicate request")
+				continue
+			}
+
+			// Set flag before calling reconnectConnection
+			c.reconnecting = true
+
 			if err := c.reconnectConnection(ctx); err != nil {
+				c.reconnecting = false
 				log.Printf("Reconnection failed: %v", err)
+			} else {
+				// Successfully reconnected - keep reconnecting flag true briefly
+				// to filter out any stale close events from the old connection
+				log.Println("Successfully reconnected and re-established all tenants")
+				go func() {
+					time.Sleep(5 * time.Second)
+					c.reconnecting = false
+					log.Println("Reconnection window closed, ready for new events")
+				}()
 			}
 		}
 	}
@@ -182,15 +200,6 @@ func (c *Client) handleChannelClosed(err *amqp.Error) {
 // reconnectConnection attempts to reconnect to the AMQP broker
 func (c *Client) reconnectConnection(ctx context.Context) error {
 	log.Println("Attempting to reconnect to AMQP broker")
-
-	// Set reconnecting flag to prevent individual tenant subscriptions
-	c.reconnecting = true
-	defer func() {
-		// Will be set to false by caller on success, or here on failure
-		if c.reconnecting {
-			c.reconnecting = false
-		}
-	}()
 
 	backoff := 1 * time.Second
 	maxBackoff := 30 * time.Second
@@ -251,8 +260,8 @@ func (c *Client) reconnectConnection(ctx context.Context) error {
 		if err == nil {
 			log.Printf("Successfully reconnected to AMQP broker (attempt %d)", attempt)
 
-			// Record success in circuit breaker
-			c.circuitBreaker.RecordSuccess()
+			// Reset circuit breaker - connection is working again
+			c.circuitBreaker.Reset()
 
 			// Wait a moment for connection to stabilize before re-establishing tenants
 			log.Println("Waiting for connection to stabilize before re-establishing tenants...")
@@ -262,6 +271,7 @@ func (c *Client) reconnectConnection(ctx context.Context) error {
 			c.reestablishTenantConnections(ctx)
 
 			log.Printf("Re-established %d tenant connections", len(c.tenantConsumers))
+
 			return nil
 		}
 
@@ -347,77 +357,50 @@ func (c *Client) Start(ctx context.Context) error {
 
 func (c *Client) handleMessage(msg amqp.Delivery) {
 	ctx := context.Background()
-	isEntityTelemetry := strings.Contains(msg.RoutingKey, ".entity.") && strings.HasSuffix(msg.RoutingKey, ".telemetry")
 
-	if isEntityTelemetry {
-		var entityPayload models.EntityTelemetryPayload
-		if err := json.Unmarshal(msg.Body, &entityPayload); err == nil && entityPayload.Entity.UniqueID != "" {
-			messageWithDelivery := &models.AMQPMessageWithDelivery{
-				Kind:         models.KindEntityTelemetry,
-				EntityUpdate: &entityPayload,
-				Delivery:     &msg,
-			}
-
-			telemetry.LogInfo(ctx, fmt.Sprintf("Received entity telemetry for entity %s from routing key %s", entityPayload.Entity.UniqueID, msg.RoutingKey),
-				otellog.String("entity_id", entityPayload.Entity.UniqueID),
-				otellog.String("routing_key", msg.RoutingKey),
-			)
-
-			select {
-			case c.messagesChan <- messageWithDelivery:
-				// Successfully queued
-			default:
-				log.Printf("Message channel full, dropping entity telemetry for entity: %s", entityPayload.Entity.UniqueID)
-				telemetry.LogWarn(ctx, fmt.Sprintf("Message channel full, dropping entity telemetry for entity %s", entityPayload.Entity.UniqueID),
-					otellog.String("entity_id", entityPayload.Entity.UniqueID),
-				)
-				if !c.config.AutoAck {
-					_ = msg.Nack(false, true)
-				}
-			}
-			return
-		}
-	}
-
-	// Try to parse as device location update
-	var locationUpdate models.DeviceLocationUpdate
-	if err := json.Unmarshal(msg.Body, &locationUpdate); err == nil && locationUpdate.DeviceEUI != "" {
-		locationUpdate.UpdatedAt = time.Now()
-
-		messageWithDelivery := &models.AMQPMessageWithDelivery{
-			Kind:           models.KindLocationUpdate,
-			LocationUpdate: &locationUpdate,
-			Delivery:       &msg,
-		}
-
-		telemetry.LogInfo(ctx, fmt.Sprintf("Received device location update for device %s from routing key %s", locationUpdate.DeviceEUI, msg.RoutingKey),
-			otellog.String("device_eui", locationUpdate.DeviceEUI),
-			otellog.String("device_id", locationUpdate.DeviceID),
-			otellog.String("routing_key", msg.RoutingKey),
-		)
-
-		select {
-		case c.messagesChan <- messageWithDelivery:
-			// Successfully queued
-		default:
-			log.Printf("Message channel full, dropping location update for device: %s", locationUpdate.DeviceEUI)
-			telemetry.LogWarn(ctx, fmt.Sprintf("Message channel full, dropping location update for device %s", locationUpdate.DeviceEUI),
-				otellog.String("device_eui", locationUpdate.DeviceEUI),
-			)
-			if !c.config.AutoAck {
-				_ = msg.Nack(false, true)
-			}
-		}
+	result, err := c.handlerRegistry.Route(ctx, msg)
+	if err != nil {
+		c.handleParseError(ctx, msg, err)
 		return
 	}
 
-	log.Printf("Error unmarshaling message into known types; dropping")
-	telemetry.LogError(ctx, fmt.Sprintf("Failed to unmarshal message from routing key %s into known types", msg.RoutingKey),
-		otellog.String("routing_key", msg.RoutingKey),
-	)
-	if !c.config.AutoAck {
-		_ = msg.Nack(false, false)
+	if !queueMessage(c.messagesChan, result) {
+		identifier := c.getMessageIdentifier(result)
+		logDroppedMessage(ctx, string(result.Kind), identifier, msg.RoutingKey)
+		c.nackMessage(msg, true)
 	}
+}
+
+// handleParseError handles messages that couldn't be parsed by any handler.
+func (c *Client) handleParseError(ctx context.Context, msg amqp.Delivery, err error) {
+	log.Printf("Error unmarshaling message from routing key %s: %v", msg.RoutingKey, err)
+	c.nackMessage(msg, false)
+}
+
+// nackMessage negatively acknowledges an AMQP message.
+func (c *Client) nackMessage(msg amqp.Delivery, requeue bool) {
+	if !c.config.AutoAck {
+		_ = msg.Nack(false, requeue)
+	}
+}
+
+// getMessageIdentifier extracts a meaningful identifier from a message for logging.
+func (c *Client) getMessageIdentifier(msg *models.AMQPMessageWithDelivery) string {
+	switch msg.Kind {
+	case models.KindEvent:
+		if msg.Event != nil {
+			return msg.Event.DeviceID
+		}
+	case models.KindEntityTelemetry:
+		if msg.EntityUpdate != nil {
+			return msg.EntityUpdate.Entity.UniqueID
+		}
+	case models.KindLocationUpdate:
+		if msg.LocationUpdate != nil {
+			return msg.LocationUpdate.DeviceEUI
+		}
+	}
+	return "unknown"
 }
 
 func (c *Client) GetMessagesChan() <-chan *models.AMQPMessageWithDelivery {
@@ -429,7 +412,9 @@ func (c *Client) AckMessage(delivery *amqp.Delivery) error {
 	if !c.config.AutoAck && delivery != nil {
 		// Silently ignore ACK errors from closed channels (testing)
 		// The message will be requeued by RabbitMQ automatically
-		_ = delivery.Ack(false)
+		if err := delivery.Ack(false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -437,8 +422,10 @@ func (c *Client) AckMessage(delivery *amqp.Delivery) error {
 // NackMessage negatively acknowledges an AMQP message
 func (c *Client) NackMessage(delivery *amqp.Delivery, requeue bool) error {
 	if !c.config.AutoAck && delivery != nil {
-		// Silently ignore NACK errors from closed channels (testing)
-		_ = delivery.Nack(false, requeue)
+		// Silently ignore NACK errors from closed channels
+		if err := delivery.Nack(false, requeue); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -511,16 +498,6 @@ func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, qu
 		return fmt.Errorf("main connection is reconnecting, tenant subscription deferred for %s", orgSlug)
 	}
 
-	c.tenantConsumersMu.Lock()
-	if _, exists := c.tenantConsumers[orgSlug]; exists {
-		c.tenantConsumersMu.Unlock()
-		log.Printf("Already subscribed to org: %s (vhost: %s)", orgSlug, vhost)
-		return nil
-	}
-	c.tenantConsumersMu.Unlock()
-
-	log.Printf("Subscribing to organization: %s (vhost: %s)", orgSlug, vhost)
-
 	conn, err := c.vhostPool.Acquire(vhost)
 	if err != nil {
 		return err
@@ -566,9 +543,23 @@ func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, qu
 		Cancel:      cancel,
 	}
 
+	// Check for existing consumer and add new one in a single critical section
 	c.tenantConsumersMu.Lock()
+	if _, exists := c.tenantConsumers[orgSlug]; exists {
+		existing := c.tenantConsumers[orgSlug]
+		c.tenantConsumersMu.Unlock()
+		log.Printf("WARNING: Already subscribed to org: %s (vhost: %s), cleaning up duplicate. Existing consumer tag: %s, New consumer tag: %s",
+			orgSlug, vhost, existing.ConsumerTag, consumerTag)
+		_ = tenantChannel.Cancel(consumerTag, false)
+		_ = tenantChannel.Close()
+		c.vhostPool.Release(vhost)
+		cancel()
+		return nil
+	}
 	c.tenantConsumers[orgSlug] = tenantConsumer
 	c.tenantConsumersMu.Unlock()
+
+	log.Printf("Creating consumer for org: %s (vhost: %s) with tag: %s", orgSlug, vhost, consumerTag)
 
 	tenantConsumer.wg.Add(1)
 	go func() {
@@ -644,8 +635,6 @@ func (c *Client) processTenantMessages(ctx context.Context, tenant *TenantConsum
 				return
 			}
 
-			log.Printf("Received message for org %s (vhost: %s): routing key %s", tenant.OrgSlug, tenant.Vhost, msg.RoutingKey)
-
 			// Process the message (puts it in messagesChan for bridge to handle)
 			c.handleMessage(msg)
 
@@ -673,7 +662,8 @@ func (c *Client) resubscribeTenant(ctx context.Context, oldTenant *TenantConsume
 		delete(c.tenantConsumers, oldTenant.OrgSlug)
 		c.tenantConsumersMu.Unlock()
 
-		err := c.subscribeToOrganization(ctx, oldTenant.Vhost, oldTenant.OrgSlug, oldTenant.QueueName, false)
+		// Bypass reconnecting check since this is a tenant-level resubscription after channel closure
+		err := c.subscribeToOrganization(ctx, oldTenant.Vhost, oldTenant.OrgSlug, oldTenant.QueueName, true)
 		if err == nil {
 			log.Printf("Successfully resubscribed to %s", oldTenant.OrgSlug)
 			return

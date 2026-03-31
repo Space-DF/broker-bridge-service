@@ -2,7 +2,6 @@ package bridge
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"sync"
 
@@ -11,8 +10,6 @@ import (
 	"github.com/Space-DF/broker-bridge-service/internal/config"
 	"github.com/Space-DF/broker-bridge-service/internal/models"
 	"github.com/Space-DF/broker-bridge-service/internal/mqtt"
-	"github.com/Space-DF/broker-bridge-service/internal/telemetry"
-	otellog "go.opentelemetry.io/otel/log"
 )
 
 // Bridge connects AMQP (RabbitMQ) and MQTT (EMQX) brokers
@@ -132,11 +129,12 @@ func (b *Bridge) Stop() error {
 	return nil
 }
 
-// processAMQPMessages handles processing messages from AMQP and publishes to MQTT
+// processAMQPMessages handles processing messages from AMQP and publishes to MQTT.
 func (b *Bridge) processAMQPMessages(ctx context.Context) {
 	log.Println("Starting AMQP message processing")
 
 	messagesChan := b.amqpClient.GetMessagesChan()
+	registry := &ProcessorRegistry{bridge: b}
 
 	for {
 		select {
@@ -146,91 +144,43 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 		case <-b.done:
 			log.Println("AMQP message processing stopped")
 			return
-		case messageWithDelivery, ok := <-messagesChan:
+		case msg, ok := <-messagesChan:
 			if !ok {
 				log.Println("AMQP messages channel closed")
 				return
 			}
 
-			delivery := messageWithDelivery.Delivery
-
-			switch messageWithDelivery.Kind {
-			case models.KindLocationUpdate:
-				locationUpdate := messageWithDelivery.LocationUpdate
-
-				topic, err := b.mqttClient.PublishDeviceTelemetry(locationUpdate)
-				if err != nil {
-					deviceId := locationUpdate.DeviceID
-					if deviceId == "" {
-						deviceId = "unknown"
-					}
-
-					log.Printf("Failed to publish device telemetry for %s: %v", deviceId, err)
-					telemetry.LogError(ctx, fmt.Sprintf("Failed to publish device %s telemetry to MQTT", locationUpdate.DeviceEUI),
-						otellog.String("device_id", deviceId),
-						otellog.String("device_eui", locationUpdate.DeviceEUI),
-						otellog.String("error", err.Error()),
-					)
-					// NACK the message to requeue it
-					_ = b.amqpClient.NackMessage(delivery, true)
-				} else {
-					log.Printf("Successfully published telemetry to MQTT topic %s", topic)
-					telemetry.LogInfo(ctx, fmt.Sprintf("Successfully published device %s telemetry to MQTT topic %s", locationUpdate.DeviceEUI, topic),
-						otellog.String("device_id", locationUpdate.DeviceID),
-						otellog.String("device_eui", locationUpdate.DeviceEUI),
-						otellog.String("mqtt_topic", topic),
-					)
-
-					// Dispatch Celery task to device-service to update device location in DB
-					if b.celeryPublisher != nil && locationUpdate.DeviceID != "" && locationUpdate.DeviceID != "unknown" {
-						org := locationUpdate.Organization
-						if org == "" {
-							org = "unknown"
-						}
-						if pubErr := b.celeryPublisher.PublishLocationUpdate(
-							org,
-							locationUpdate.DeviceID,
-							locationUpdate.Location.Latitude,
-							locationUpdate.Location.Longitude,
-						); pubErr != nil {
-							log.Printf("Failed to dispatch Celery location update for device %s: %v", locationUpdate.DeviceID, pubErr)
-						} else {
-							log.Printf("Dispatched Celery location update for device %s (org: %s)", locationUpdate.DeviceID, org)
-						}
-					}
-
-					// ACK the message only after successful MQTT publish
-					_ = b.amqpClient.AckMessage(delivery)
-				}
-
-			case models.KindEntityTelemetry:
-				entityUpdate := messageWithDelivery.EntityUpdate
-
-				topic, err := b.mqttClient.PublishEntityTelemetry(entityUpdate)
-				if err != nil {
-					entityId := entityUpdate.Entity.UniqueID
-					if entityId == "" {
-						entityId = "unknown"
-					}
-					log.Printf("Failed to publish entity telemetry for %s: %v", entityId, err)
-					telemetry.LogError(ctx, fmt.Sprintf("Failed to publish entity %s telemetry to MQTT", entityId),
-						otellog.String("entity_id", entityId),
-						otellog.String("error", err.Error()),
-					)
-					_ = b.amqpClient.NackMessage(delivery, true)
-				} else {
-					telemetry.LogInfo(ctx, fmt.Sprintf("Successfully published entity %s telemetry to MQTT topic %s", entityUpdate.Entity.UniqueID, topic),
-						otellog.String("entity_id", entityUpdate.Entity.UniqueID),
-						otellog.String("mqtt_topic", topic),
-					)
-					_ = b.amqpClient.AckMessage(delivery)
-				}
-
-			default:
-				log.Printf("Unknown message kind; NACKing")
-				_ = b.amqpClient.NackMessage(delivery, false)
-			}
+			b.processMessage(ctx, registry, msg)
 		}
+	}
+}
+
+// processMessage handles a single message using the appropriate processor.
+func (b *Bridge) processMessage(ctx context.Context, registry *ProcessorRegistry, msg *models.AMQPMessageWithDelivery) {
+	processor := registry.GetProcessor(msg)
+
+	// Try to publish to MQTT
+	topic, err := processor.Publish(ctx)
+	if err != nil {
+		log.Printf("Failed to publish %s for %s: %v", msg.Kind, processor.GetIdentifier(), err)
+		processor.LogFailure(ctx, err)
+		if err := b.amqpClient.NackMessage(msg.Delivery, true); err != nil {
+			log.Printf("Error occurred while negatively acknowledging message: %v", err)
+		}
+		return
+	}
+
+	log.Printf("Successfully published %s to MQTT topic %s", msg.Kind, topic)
+	processor.LogSuccess(ctx, topic)
+
+	// Run post-processing (e.g., Celery tasks)
+	if postErr := processor.PostProcess(ctx); postErr != nil {
+		log.Printf("Post-processing failed for %s: %v", processor.GetIdentifier(), postErr)
+	}
+
+	// ACK after successful processing
+	if err := b.amqpClient.AckMessage(msg.Delivery); err != nil {
+		log.Printf("Error occurred while acknowledging message: %v", err)
 	}
 }
 
