@@ -59,7 +59,7 @@ func buildTelemetryTopic(update *models.DeviceLocationUpdate) string {
 
 func buildEventTopic(event *models.Event) string {
 	if event == nil {
-		return "tenant/unknown/device/unknown/events"
+		return "tenant/unknown/device/unknown/event"
 	}
 
 	org := strings.TrimSpace(event.Organization)
@@ -75,8 +75,8 @@ func buildEventTopic(event *models.Event) string {
 	space := strings.TrimSpace(event.SpaceSlug)
 
 	if space != "" {
-		return fmt.Sprintf("tenant/%s/space/%s/device/%s/events", org, space, device)
+		return fmt.Sprintf("tenant/%s/space/%s/device/%s/event", org, space, device)
 	}
 
-	return fmt.Sprintf("tenant/%s/device/%s/events", org, device)
+	return fmt.Sprintf("tenant/%s/device/%s/event", org, device)
 }
