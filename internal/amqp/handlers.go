@@ -183,6 +183,6 @@ func queueMessage(ch chan<- *models.AMQPMessageWithDelivery, msg *models.AMQPMes
 }
 
 // logDroppedMessage logs when a message is dropped due to a full channel.
-func logDroppedMessage(ctx context.Context, msgType, identifier, routingKey string) {
+func logDroppedMessage(msgType, identifier, routingKey string) {
 	log.Printf("WARNING: Dropping %s message for %s due to full channel. Routing key: %s", msgType, identifier, routingKey)
 }
