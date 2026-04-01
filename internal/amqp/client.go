@@ -360,19 +360,19 @@ func (c *Client) handleMessage(msg amqp.Delivery) {
 
 	result, err := c.handlerRegistry.Route(ctx, msg)
 	if err != nil {
-		c.handleParseError(ctx, msg, err)
+		c.handleParseError(msg, err)
 		return
 	}
 
 	if !queueMessage(c.messagesChan, result) {
 		identifier := c.getMessageIdentifier(result)
-		logDroppedMessage(ctx, string(result.Kind), identifier, msg.RoutingKey)
+		logDroppedMessage(string(result.Kind), identifier, msg.RoutingKey)
 		c.nackMessage(msg, true)
 	}
 }
 
 // handleParseError handles messages that couldn't be parsed by any handler.
-func (c *Client) handleParseError(ctx context.Context, msg amqp.Delivery, err error) {
+func (c *Client) handleParseError(msg amqp.Delivery, err error) {
 	log.Printf("Error unmarshaling message from routing key %s: %v", msg.RoutingKey, err)
 	c.nackMessage(msg, false)
 }
