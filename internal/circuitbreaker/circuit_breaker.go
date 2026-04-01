@@ -178,3 +178,13 @@ func (cb *CircuitBreaker) RecordFailure() {
 	defer cb.mu.Unlock()
 	cb.onFailure()
 }
+
+// Reset manually resets the circuit breaker to closed state
+// Use after successful reconnection to immediately allow requests
+func (cb *CircuitBreaker) Reset() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.consecutiveFailures = 0
+	cb.consecutiveSuccesses = 0
+	cb.state = StateClosed
+}
