@@ -74,14 +74,20 @@ func (p *Publisher) connect() error {
 	return nil
 }
 
+// isConnClosed checks if the connection or channel is closed
+func (p *Publisher) isConnClosed() bool {
+	return p.conn == nil || p.conn.IsClosed() || p.channel == nil || p.channel.IsClosed()
+}
+
 // PublishLocationUpdate sends a Celery task to update a device's location.
 func (p *Publisher) PublishLocationUpdate(orgSlug, deviceID string, latitude, longitude float64) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.channel == nil {
+	// Silently reconnect if connection is closed
+	if p.isConnClosed() {
 		if err := p.connect(); err != nil {
-			return err
+			return fmt.Errorf("celery: reconnect failed: %w", err)
 		}
 	}
 
@@ -110,14 +116,13 @@ func (p *Publisher) PublishLocationUpdate(orgSlug, deviceID string, latitude, lo
 
 	err = p.channel.PublishWithContext(context.Background(), locationExchange, locationQueue, false, false, pub)
 	if err != nil {
-		// Reconnect once on failure
-		log.Printf("Celery publisher: publish failed, reconnecting: %v", err)
-		if reconnErr := p.connect(); reconnErr != nil {
-			return fmt.Errorf("celery: reconnect failed: %w", reconnErr)
+		// Connection may have closed during publish - try one more reconnect
+		if reconnectErr := p.connect(); reconnectErr != nil {
+			return fmt.Errorf("celery: reconnect failed: %w", reconnectErr)
 		}
 		err = p.channel.PublishWithContext(context.Background(), locationExchange, locationQueue, false, false, pub)
 		if err != nil {
-			return fmt.Errorf("celery: publish retry failed: %w", err)
+			return fmt.Errorf("celery: publish failed: %w", err)
 		}
 	}
 
