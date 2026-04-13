@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Space-DF/broker-bridge-service/internal/amqp/helpers"
@@ -26,6 +27,7 @@ type TenantConsumer struct {
 	ConsumerTag string
 	Channel     *amqp.Channel
 	Cancel      context.CancelFunc
+	ParentCtx   context.Context
 	wg          sync.WaitGroup
 }
 
@@ -42,12 +44,15 @@ type Client struct {
 	eventManager      *rabbitmq.EventManager
 	handlerRegistry   *HandlerRegistry
 
+	stopOnce sync.Once
+
 	// Connection monitoring
 	circuitBreaker       *circuitbreaker.CircuitBreaker
 	reconnectChan        chan struct{}
 	connCloseNotifier    chan *amqp.Error
 	channelCloseNotifier chan *amqp.Error
-	reconnecting         bool // Flag to prevent concurrent reconnections
+	reconnecting         atomic.Bool
+	orgEventsCancel      context.CancelFunc
 }
 
 func NewClient(cfg config.AMQPConfig, orgEventsCfg config.OrgEventsConfig) *Client {
@@ -144,26 +149,45 @@ func (c *Client) monitorConnection(ctx context.Context) {
 
 		case <-c.reconnectChan:
 			// Check if already reconnecting to prevent concurrent reconnections
-			if c.reconnecting {
+			if c.reconnecting.Load() {
 				log.Println("Already reconnecting, skipping duplicate request")
 				continue
 			}
 
 			// Set flag before calling reconnectConnection
-			c.reconnecting = true
+			c.reconnecting.Store(true)
 
 			if err := c.reconnectConnection(ctx); err != nil {
-				c.reconnecting = false
+				c.reconnecting.Store(false)
 				log.Printf("Reconnection failed: %v", err)
-			} else {
-				// Successfully reconnected - keep reconnecting flag true briefly
-				// to filter out any stale close events from the old connection
-				log.Println("Successfully reconnected and re-established all tenants")
+				// Schedule another reconnection attempt
 				go func() {
-					time.Sleep(5 * time.Second)
-					c.reconnecting = false
-					log.Println("Reconnection window closed, ready for new events")
+					select {
+					case <-time.After(10 * time.Second):
+						select {
+						case c.reconnectChan <- struct{}{}:
+						default:
+						}
+					case <-ctx.Done():
+					}
 				}()
+			} else {
+				// Clear flag immediately — reestablishTenantConnections already
+				// resubscribed all tenants, so org events can be processed normally.
+				c.reconnecting.Store(false)
+				// Drain stale reconnection requests
+				for {
+					select {
+					case _, ok := <-c.reconnectChan:
+						if !ok {
+							goto done
+						}
+					default:
+						goto done
+					}
+				}
+			done:
+				log.Println("Successfully reconnected and re-established all tenants")
 			}
 		}
 	}
@@ -176,9 +200,6 @@ func (c *Client) handleConnectionClosed(err *amqp.Error) {
 	// Invalidate all pooled vhost connections since they're also closed
 	c.vhostPool.InvalidateAll()
 
-	// Record failure in circuit breaker
-	c.circuitBreaker.RecordFailure()
-
 	// Notify reconnection goroutine
 	select {
 	case c.reconnectChan <- struct{}{}:
@@ -189,6 +210,9 @@ func (c *Client) handleConnectionClosed(err *amqp.Error) {
 // handleChannelClosed handles unexpected channel closure
 func (c *Client) handleChannelClosed(err *amqp.Error) {
 	log.Printf("AMQP channel closed unexpectedly: %v (code: %d)", err, err.Code)
+
+	// Record failure — channel error means something went wrong
+	c.circuitBreaker.RecordFailure()
 
 	// Just trigger full reconnection - it's safer and simpler
 	select {
@@ -208,11 +232,12 @@ func (c *Client) reconnectConnection(ctx context.Context) error {
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Check circuit breaker
 		if c.circuitBreaker.State() == circuitbreaker.StateOpen {
-			log.Printf("Circuit breaker is open, waiting %v", 30*time.Second)
+			cbTimeout := c.circuitBreaker.ResetTimeout()
+			log.Printf("Circuit breaker is open, waiting %v", cbTimeout)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(30 * time.Second):
+			case <-time.After(cbTimeout):
 			}
 		}
 
@@ -265,12 +290,42 @@ func (c *Client) reconnectConnection(ctx context.Context) error {
 
 			// Wait a moment for connection to stabilize before re-establishing tenants
 			log.Println("Waiting for connection to stabilize before re-establishing tenants...")
-			time.Sleep(500 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+			}
 
 			// Re-establish all tenant connections (with reconnecting flag still set)
 			c.reestablishTenantConnections(ctx)
 
 			log.Printf("Re-established %d tenant connections", len(c.tenantConsumers))
+			// Cancel old org events listener
+			if c.orgEventsCancel != nil {
+				c.orgEventsCancel()
+			}
+
+			// Restart org events listener on the new EventManager
+			orgEventsCtx, orgEventsCancel := context.WithCancel(ctx)
+			c.orgEventsCancel = orgEventsCancel
+			go func() {
+				if err := c.eventManager.ListenToOrgEvents(orgEventsCtx, c.handleOrgEvent); err != nil {
+					log.Printf("Error listening to org events after reconnection: %v", err)
+				}
+			}()
+
+			// Send discovery on a separate channel to avoid racing
+			go func() {
+				ch, err := c.orgEventsConn.Channel()
+				if err != nil {
+					log.Printf("Warning: failed to open channel for discovery request: %v", err)
+					return
+				}
+				defer ch.Close()
+				if err := c.eventManager.SendDiscoveryRequestOnChannel(ctx, ch); err != nil {
+					log.Printf("Warning: Failed to send discovery request after reconnection: %v", err)
+				}
+			}()
 
 			return nil
 		}
@@ -332,16 +387,26 @@ func (c *Client) Start(ctx context.Context) error {
 	go c.monitorConnection(ctx)
 
 	// Start listening for org events
+	orgEventsCtx, orgEventsCancel := context.WithCancel(ctx)
+	c.orgEventsCancel = orgEventsCancel
 	go func() {
-		if err := c.eventManager.ListenToOrgEvents(ctx, c.handleOrgEvent); err != nil {
+		if err := c.eventManager.ListenToOrgEvents(orgEventsCtx, c.handleOrgEvent); err != nil {
 			log.Printf("Error listening to org events: %v", err)
 		}
 	}()
 
-	// Send discovery request to get all active organizations
-	if err := c.eventManager.SendDiscoveryRequest(ctx); err != nil {
-		log.Printf("Warning: Failed to send discovery request: %v", err)
-	}
+	// Send discovery request on a separate channel to avoid concurrent access
+	go func() {
+		ch, err := c.orgEventsConn.Channel()
+		if err != nil {
+			log.Printf("Warning: failed to open channel for discovery request: %v", err)
+			return
+		}
+		defer ch.Close()
+		if err := c.eventManager.SendDiscoveryRequestOnChannel(ctx, ch); err != nil {
+			log.Printf("Warning: Failed to send discovery request: %v", err)
+		}
+	}()
 
 	log.Println("AMQP client started successfully")
 
@@ -459,6 +524,14 @@ func (c *Client) handleOrgEvent(ctx context.Context, msg amqp.Delivery) error {
 			log.Printf("Org created event missing vhost for org: %s", orgSlug)
 			return nil
 		}
+		// Skip if already subscribed (e.g. from reestablishTenantConnections)
+		c.tenantConsumersMu.RLock()
+		_, already := c.tenantConsumers[orgSlug]
+		c.tenantConsumersMu.RUnlock()
+		if already {
+			log.Printf("Skipping org.created for %s: already subscribed", orgSlug)
+			return nil
+		}
 		return c.subscribeToOrganization(ctx, vhost, orgSlug, queueName, false)
 
 	case models.OrgDeactivated, models.OrgDeleted:
@@ -494,7 +567,7 @@ func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, qu
 	}
 
 	// Block subscription if main connection is reconnecting (unless bypassed)
-	if !bypassReconnectingCheck && c.reconnecting {
+	if !bypassReconnectingCheck && c.reconnecting.Load() {
 		return fmt.Errorf("main connection is reconnecting, tenant subscription deferred for %s", orgSlug)
 	}
 
@@ -541,20 +614,21 @@ func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, qu
 		ConsumerTag: consumerTag,
 		Channel:     tenantChannel,
 		Cancel:      cancel,
+		ParentCtx:   ctx,
 	}
 
-	// Check for existing consumer and add new one in a single critical section
+	// Check for existing consumer
 	c.tenantConsumersMu.Lock()
-	if _, exists := c.tenantConsumers[orgSlug]; exists {
-		existing := c.tenantConsumers[orgSlug]
-		c.tenantConsumersMu.Unlock()
-		log.Printf("WARNING: Already subscribed to org: %s (vhost: %s), cleaning up duplicate. Existing consumer tag: %s, New consumer tag: %s",
+	if existing, exists := c.tenantConsumers[orgSlug]; exists {
+		log.Printf("WARNING: Replacing existing subscription for org: %s (vhost: %s). Old tag: %s, New tag: %s",
 			orgSlug, vhost, existing.ConsumerTag, consumerTag)
-		_ = tenantChannel.Cancel(consumerTag, false)
-		_ = tenantChannel.Close()
-		c.vhostPool.Release(vhost)
-		cancel()
-		return nil
+		// Cancel and clean up the old consumer
+		existing.Cancel()
+		if existing.Channel != nil {
+			_ = existing.Channel.Cancel(existing.ConsumerTag, false)
+			_ = existing.Channel.Close()
+		}
+		c.vhostPool.Release(existing.Vhost)
 	}
 	c.tenantConsumers[orgSlug] = tenantConsumer
 	c.tenantConsumersMu.Unlock()
@@ -622,8 +696,8 @@ func (c *Client) processTenantMessages(ctx context.Context, tenant *TenantConsum
 					// Just drain, don't process or ACK
 				}
 
-				// Trigger resubscription for this tenant
-				go c.resubscribeTenant(ctx, tenant)
+				// Trigger resubscription for this tenant using parent context
+				go c.resubscribeTenant(tenant.ParentCtx, tenant)
 				return
 			}
 
@@ -631,7 +705,7 @@ func (c *Client) processTenantMessages(ctx context.Context, tenant *TenantConsum
 			// When the AMQP connection closes, the delivery becomes invalid
 			if tenant.Channel == nil || tenant.Channel.IsClosed() {
 				log.Printf("Tenant channel closed, skipping message processing for %s", tenant.OrgSlug)
-				go c.resubscribeTenant(ctx, tenant)
+				go c.resubscribeTenant(tenant.ParentCtx, tenant)
 				return
 			}
 
@@ -653,8 +727,21 @@ func (c *Client) resubscribeTenant(ctx context.Context, oldTenant *TenantConsume
 	// Check if main connection is down - if so, let centralized reconnection handle it
 	if c.orgEventsConn == nil || c.orgEventsConn.IsClosed() {
 		log.Printf("Main connection down, waiting for centralized reconnection for %s", oldTenant.OrgSlug)
+		// Release the old tenant's vhost connection since we can't resubscribe
+		if oldTenant.Channel != nil {
+			_ = oldTenant.Channel.Cancel(oldTenant.ConsumerTag, false)
+			_ = oldTenant.Channel.Close()
+		}
+		c.vhostPool.Release(oldTenant.Vhost)
 		return
 	}
+
+	// Clean up the old tenant's resources
+	if oldTenant.Channel != nil {
+		_ = oldTenant.Channel.Cancel(oldTenant.ConsumerTag, false)
+		_ = oldTenant.Channel.Close()
+	}
+	c.vhostPool.Release(oldTenant.Vhost)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// Remove old tenant from map first so subscribeToOrganization can create a new subscription
@@ -708,19 +795,21 @@ func (c *Client) stopAllConsumers() {
 func (c *Client) Stop() error {
 	log.Println("Stopping AMQP client")
 
-	close(c.done)
+	c.stopOnce.Do(func() {
+		close(c.done)
 
-	c.stopAllConsumers()
+		c.stopAllConsumers()
 
-	if c.orgEventsChannel != nil {
-		_ = c.orgEventsChannel.Close()
-	}
+		if c.orgEventsChannel != nil {
+			_ = c.orgEventsChannel.Close()
+		}
 
-	if c.orgEventsConn != nil {
-		_ = c.orgEventsConn.Close()
-	}
+		if c.orgEventsConn != nil {
+			_ = c.orgEventsConn.Close()
+		}
 
-	close(c.messagesChan)
+		close(c.messagesChan)
+	})
 	log.Println("AMQP client stopped")
 	return nil
 }
