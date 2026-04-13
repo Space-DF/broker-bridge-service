@@ -30,6 +30,12 @@ type OrgEventProcessor func(context.Context, amqp.Delivery) error
 
 // sendDiscoveryRequest sends a discovery request to get all active organizations
 func (m *EventManager) SendDiscoveryRequest(ctx context.Context) error {
+	return m.SendDiscoveryRequestOnChannel(ctx, m.channel)
+}
+
+// SendDiscoveryRequestOnChannel sends a discovery request using the given channel
+// to avoid concurrent access on the org events channel.
+func (m *EventManager) SendDiscoveryRequestOnChannel(ctx context.Context, ch *amqp.Channel) error {
 	log.Println("Sending discovery request for active organizations...")
 
 	request := models.OrgDiscoveryRequest{
@@ -45,7 +51,7 @@ func (m *EventManager) SendDiscoveryRequest(ctx context.Context) error {
 		return fmt.Errorf("failed to marshal discovery request: %w", err)
 	}
 
-	err = m.channel.PublishWithContext(
+	err = ch.PublishWithContext(
 		ctx,
 		m.cfg.Exchange,
 		string(models.OrgDiscoveryReq),
@@ -117,7 +123,7 @@ func (m *EventManager) ListenToOrgEvents(ctx context.Context, process OrgEventPr
 			messages, err = m.channel.Consume(
 				m.cfg.Queue,
 				m.cfg.ConsumerTag,
-				false, // manual ack for reliability
+				false,
 				false,
 				false,
 				false,

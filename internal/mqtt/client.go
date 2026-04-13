@@ -21,6 +21,7 @@ type Client struct {
 	done         chan bool
 	subscribed   bool
 	subscribeMu  sync.Mutex
+	stopOnce     sync.Once
 }
 
 // NewClient creates a new MQTT client
@@ -102,26 +103,28 @@ func (c *Client) GetMessagesChan() <-chan *models.DeviceMessage {
 
 // Stop gracefully stops the MQTT client
 func (c *Client) Stop() error {
-	close(c.done)
+	c.stopOnce.Do(func() {
+		close(c.done)
 
-	c.subscribeMu.Lock()
-	c.subscribed = false
-	c.subscribeMu.Unlock()
+		c.subscribeMu.Lock()
+		c.subscribed = false
+		c.subscribeMu.Unlock()
 
-	if c.client != nil && c.client.IsConnected() {
-		// Unsubscribe from all topics
-		for _, topic := range c.config.Topics {
-			if token := c.client.Unsubscribe(topic); token.Wait() && token.Error() != nil {
-				log.Printf("Error unsubscribing from topic %s: %v", topic, token.Error())
+		if c.client != nil && c.client.IsConnected() {
+			// Unsubscribe from all topics
+			for _, topic := range c.config.Topics {
+				if token := c.client.Unsubscribe(topic); token.Wait() && token.Error() != nil {
+					log.Printf("Error unsubscribing from topic %s: %v", topic, token.Error())
+				}
 			}
+
+			// Disconnect
+			c.client.Disconnect(250)
+			log.Println("Disconnected from EMQX")
 		}
 
-		// Disconnect
-		c.client.Disconnect(250)
-		log.Println("Disconnected from EMQX")
-	}
-
-	close(c.messagesChan)
+		close(c.messagesChan)
+	})
 	return nil
 }
 
@@ -160,7 +163,8 @@ func (c *Client) onConnect(client mqtt.Client) {
 	if wasSubscribed {
 		log.Println("Restoring MQTT subscriptions after reconnection...")
 		if err := c.subscribeTopics(); err != nil {
-			log.Printf("Failed to restore subscriptions: %v", err)
+			log.Printf("Failed to restore subscriptions: %v (will retry on next reconnect)", err)
+			// Keep subscribed=true so next onConnect retry will attempt again
 		} else {
 			log.Println("Successfully restored MQTT subscriptions")
 		}
