@@ -165,6 +165,11 @@ func (cb *CircuitBreaker) State() State {
 	return cb.state
 }
 
+// ResetTimeout returns the configured reset timeout
+func (cb *CircuitBreaker) ResetTimeout() time.Duration {
+	return cb.config.ResetTimeout
+}
+
 // RecordSuccess records a successful operation
 func (cb *CircuitBreaker) RecordSuccess() {
 	cb.mu.Lock()

@@ -63,7 +63,10 @@ func (b *Bridge) Start(ctx context.Context) error {
 	go func() {
 		if err := b.mqttClient.Start(ctx); err != nil {
 			log.Printf("MQTT client error: %v", err)
-			errorChan <- err
+			select {
+			case errorChan <- err:
+			case <-b.done:
+			}
 			b.stopOnce.Do(func() { close(b.done) })
 			return
 		}
@@ -73,7 +76,10 @@ func (b *Bridge) Start(ctx context.Context) error {
 	go func() {
 		if err := b.amqpClient.Start(ctx); err != nil {
 			log.Printf("AMQP client error: %v", err)
-			errorChan <- err
+			select {
+			case errorChan <- err:
+			case <-b.done:
+			}
 			b.stopOnce.Do(func() { close(b.done) })
 			return
 		}
@@ -146,7 +152,10 @@ func (b *Bridge) processAMQPMessages(ctx context.Context) {
 			return
 		case msg, ok := <-messagesChan:
 			if !ok {
-				log.Println("AMQP messages channel closed")
+				log.Println("AMQP messages channel closed, draining remaining messages")
+				for remainingMsg := range messagesChan {
+					b.processMessage(ctx, registry, remainingMsg)
+				}
 				return
 			}
 
