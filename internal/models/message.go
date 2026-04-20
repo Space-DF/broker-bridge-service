@@ -132,21 +132,29 @@ type TelemetryEntity struct {
 
 // Event represents an event occurrence from the telemetry service.
 type Event struct {
-	EventID        int64     `json:"event_id"`
-	EventTypeID    int       `json:"event_type_id"`
-	EventLevel     *string   `json:"event_level,omitempty"`     // manufacturer, system, automation
-	EventRuleID    *string   `json:"event_rule_id,omitempty"`   // Rule that triggered this event
-	AutomationID   *string   `json:"automation_id,omitempty"`   // Automation that triggered this event
-	AutomationName *string   `json:"automation_name,omitempty"` // Name of the automation
-	GeofenceID     *string   `json:"geofence_id,omitempty"`     // Geofence that triggered this event
-	GeofenceName   *string   `json:"geofence_name,omitempty"`   // Name of the geofence
-	Organization   string    `json:"organization,omitempty"`    // Extracted from routing key
-	SpaceSlug      string    `json:"space_slug,omitempty"`
-	DeviceID       string    `json:"device_id,omitempty"`
-	EntityID       *string   `json:"entity_id,omitempty"`
-	StateID        uuid.UUID `json:"state_id,omitempty"`
-	Title          string    `json:"title,omitempty"`
-	TimeFiredTs    int64     `json:"time_fired_ts"`
-	EventType      string    `json:"event_type,omitempty"`
-	Location       *Location `json:"location,omitempty"`
+	EventID        int64          `json:"event_id"`
+	EventTypeID    int            `json:"event_type_id"`
+	EventLevel     *string        `json:"event_level,omitempty"`
+	EventRuleID    *string        `json:"event_rule_id,omitempty"`
+	AutomationID   *string        `json:"automation_id,omitempty"`
+	AutomationName *string        `json:"automation_name,omitempty"`
+	GeofenceID     *string        `json:"geofence_id,omitempty"`
+	GeofenceName   *string        `json:"geofence_name,omitempty"`
+	Organization   string         `json:"organization,omitempty"`
+	SpaceSlug      string         `json:"space_slug,omitempty"`
+	DeviceID       string         `json:"device_id,omitempty"`
+	EntityID       *string        `json:"entity_id,omitempty"`
+	StateID        uuid.UUID      `json:"state_id,omitempty"`
+	Title          string         `json:"title,omitempty"`
+	TimeFiredTs    int64          `json:"time_fired_ts"`
+	EventType      string         `json:"event_type,omitempty"`
+	Location       *Location      `json:"location,omitempty"`
+	LNSAlert       *EventLNSAlert `json:"lns_alert,omitempty"`
+}
+
+type EventLNSAlert struct {
+	Code    string `json:"code"`
+	Level   string `json:"level"`
+	Message string `json:"message"`
+	Source  string `json:"source"`
 }
