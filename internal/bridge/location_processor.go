@@ -32,6 +32,11 @@ func (p *locationUpdateProcessor) PostProcess(ctx context.Context) error {
 		return nil
 	}
 
+	// Validate location coordinates
+	if !isValidLocation(p.update.Location.Latitude, p.update.Location.Longitude) {
+		return nil
+	}
+
 	org := p.update.Organization
 	if org == "" {
 		org = "unknown"
@@ -50,4 +55,17 @@ func (p *locationUpdateProcessor) GetIdentifier() string {
 		return p.update.DeviceID
 	}
 	return p.update.DeviceEUI
+}
+
+// isValidLocation checks if latitude and longitude are valid coordinates
+func isValidLocation(latitude, longitude float64) bool {
+	// Latitude: -90 to 90, Longitude: -180 to 180
+	// Also reject if both are zero (likely invalid/default values)
+	if latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 {
+		return false
+	}
+	if latitude == 0 && longitude == 0 {
+		return false
+	}
+	return true
 }
