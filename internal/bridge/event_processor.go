@@ -7,11 +7,9 @@ import (
 	"github.com/Space-DF/broker-bridge-service/internal/models"
 )
 
-// eventProcessor handles event messages.
 type eventProcessor struct {
-	bridge   *Bridge
-	event    *models.Event
-	delivery interface{}
+	bridge *Bridge
+	event  *models.Event
 }
 
 func (p *eventProcessor) Publish(ctx context.Context) (string, error) {

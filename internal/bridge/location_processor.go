@@ -7,11 +7,9 @@ import (
 	"github.com/Space-DF/broker-bridge-service/internal/models"
 )
 
-// locationUpdateProcessor handles device location updates.
 type locationUpdateProcessor struct {
-	bridge   *Bridge
-	update   *models.DeviceLocationUpdate
-	delivery interface{}
+	bridge *Bridge
+	update *models.DeviceLocationUpdate
 }
 
 func (p *locationUpdateProcessor) Publish(ctx context.Context) (string, error) {

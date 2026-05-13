@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,9 +51,9 @@ type ConnectionInfo struct {
 
 // Location represents location data
 type Location struct {
-	Latitude  float64 `json:"latitude"`
-	Longitude float64 `json:"longitude"`
-	Accuracy  float64 `json:"accuracy,omitempty"`
+	Latitude  float64  `json:"latitude"`
+	Longitude float64  `json:"longitude"`
+	Accuracy  float64  `json:"accuracy,omitempty"`
 	Bearing   *float64 `json:"bearing"`
 }
 
@@ -70,12 +71,14 @@ type DeviceLocationUpdate struct {
 	UpdatedAt    time.Time              `json:"updated_at"`
 }
 
-// AMQPMessageWithDelivery combines location update with AMQP delivery info for reliable processing
+// AMQPMessageWithDelivery wraps a raw AMQP delivery with its determined kind.
+// Processors unmarshal Body into their own types.
 type AMQPMessageWithDelivery struct {
 	Kind           MessageKind
 	LocationUpdate *DeviceLocationUpdate
 	EntityUpdate   *EntityTelemetryPayload
 	Event          *Event
+	ActivityLog    *ActivityLog
 	Delivery       *amqp.Delivery
 }
 
@@ -102,6 +105,8 @@ const (
 	KindLocationUpdate  MessageKind = "location_update"
 	KindEntityTelemetry MessageKind = "entity_telemetry"
 	KindEvent           MessageKind = "event"
+	KindActivityLog     MessageKind = "activity_log"
+	KindSkip            MessageKind = "skip"
 )
 
 // EntityTelemetryPayload mirrors transformer per-entity telemetry.
@@ -158,4 +163,12 @@ type EventLNSAlert struct {
 	Level   string `json:"level"`
 	Message string `json:"message"`
 	Source  string `json:"source"`
+}
+
+type ActivityLog struct {
+	ID              string          `json:"id"`
+	DeviceEUI       string          `json:"device_eui"`
+	Timestamp       time.Time       `json:"timestamp"`
+	OriginalPayload json.RawMessage `json:"original_payload"`
+	Organization    string          `json:"organization"`
 }

@@ -18,7 +18,6 @@ type Config struct {
 	RateLimit     RateLimitConfig     `mapstructure:"rate_limit"`
 	OpenTelemetry OpenTelemetryConfig `mapstructure:"opentelemetry"`
 }
-
 type ServerConfig struct {
 	Host         string        `mapstructure:"host" env:"SERVER_HOST"`
 	Port         int           `mapstructure:"port" env:"SERVER_PORT"`
