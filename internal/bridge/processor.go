@@ -29,23 +29,25 @@ func (r *ProcessorRegistry) GetProcessor(msg *models.AMQPMessageWithDelivery) me
 	switch msg.Kind {
 	case models.KindLocationUpdate:
 		return &locationUpdateProcessor{
-			bridge:   r.bridge,
-			update:   msg.LocationUpdate,
-			delivery: msg.Delivery,
+			bridge: r.bridge,
+			update: msg.LocationUpdate,
 		}
 	case models.KindEntityTelemetry:
 		return &entityTelemetryProcessor{
-			bridge:   r.bridge,
-			update:   msg.EntityUpdate,
-			delivery: msg.Delivery,
+			bridge: r.bridge,
+			update: msg.EntityUpdate,
 		}
 	case models.KindEvent:
 		return &eventProcessor{
-			bridge:   r.bridge,
-			event:    msg.Event,
-			delivery: msg.Delivery,
+			bridge: r.bridge,
+			event:  msg.Event,
+		}
+	case models.KindActivityLog:
+		return &activityLogProcessor{
+			bridge: r.bridge,
+			log:    msg.ActivityLog,
 		}
 	default:
-		return &unknownProcessor{delivery: msg.Delivery}
+		return &unknownProcessor{}
 	}
 }

@@ -179,15 +179,12 @@ func (b *Bridge) processMessage(ctx context.Context, registry *ProcessorRegistry
 		return
 	}
 
-	log.Printf("Successfully published %s to MQTT topic %s", msg.Kind, topic)
 	processor.LogSuccess(ctx, topic)
 
-	// Run post-processing (e.g., Celery tasks)
 	if postErr := processor.PostProcess(ctx); postErr != nil {
 		log.Printf("Post-processing failed for %s: %v", processor.GetIdentifier(), postErr)
 	}
 
-	// ACK after successful processing
 	if err := b.amqpClient.AckMessage(msg.Delivery); err != nil {
 		log.Printf("Error occurred while acknowledging message: %v", err)
 	}

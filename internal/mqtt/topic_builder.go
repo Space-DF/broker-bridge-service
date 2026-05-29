@@ -80,3 +80,21 @@ func buildEventTopic(event *models.Event) string {
 
 	return fmt.Sprintf("tenant/%s/device/%s/event", org, device)
 }
+
+func buildActivityLogTopic(activityLog *models.ActivityLog) string {
+	if activityLog == nil {
+		return "tenant/unknown/device/unknown/activity_log"
+	}
+
+	org := strings.TrimSpace(activityLog.Organization)
+	if org == "" {
+		org = "unknown"
+	}
+
+	device := strings.TrimSpace(activityLog.DeviceEUI)
+	if device == "" {
+		device = "unknown"
+	}
+
+	return fmt.Sprintf("tenant/%s/device/%s/activity_log", org, device)
+}

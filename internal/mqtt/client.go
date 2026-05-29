@@ -244,3 +244,17 @@ func (c *Client) PublishEvent(event *models.Event) (string, error) {
 
 	return topic, nil
 }
+
+// PublishActivityLog publishes an activity log to a tenant-scoped topic.
+func (c *Client) PublishActivityLog(activityLog *models.ActivityLog) (string, error) {
+	if activityLog == nil {
+		return "", fmt.Errorf("activity log is nil")
+	}
+
+	topic := buildActivityLogTopic(activityLog)
+	if err := c.Publish(topic, activityLog); err != nil {
+		return "", err
+	}
+
+	return topic, nil
+}

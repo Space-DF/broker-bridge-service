@@ -72,10 +72,10 @@ func NewClient(cfg config.AMQPConfig, orgEventsCfg config.OrgEventsConfig) *Clie
 		tenantConsumers:      make(map[string]*TenantConsumer),
 		vhostPool:            pool.New(cfg.URL),
 		circuitBreaker:       cb,
+		handlerRegistry:      NewHandlerRegistry(),
 		reconnectChan:        make(chan struct{}, 1),
 		connCloseNotifier:    make(chan *amqp.Error, 1),
 		channelCloseNotifier: make(chan *amqp.Error, 1),
-		handlerRegistry:      NewHandlerRegistry(),
 	}
 }
 
@@ -464,6 +464,10 @@ func (c *Client) getMessageIdentifier(msg *models.AMQPMessageWithDelivery) strin
 		if msg.LocationUpdate != nil {
 			return msg.LocationUpdate.DeviceEUI
 		}
+	case models.KindActivityLog:
+		if msg.ActivityLog != nil {
+			return msg.ActivityLog.DeviceEUI
+		}
 	}
 	return "unknown"
 }
@@ -475,7 +479,7 @@ func (c *Client) GetMessagesChan() <-chan *models.AMQPMessageWithDelivery {
 // AckMessage acknowledges an AMQP message
 func (c *Client) AckMessage(delivery *amqp.Delivery) error {
 	if !c.config.AutoAck && delivery != nil {
-		// Silently ignore ACK errors from closed channels (testing)
+		// Silently ignore ACK errors from closed channels
 		// The message will be requeued by RabbitMQ automatically
 		if err := delivery.Ack(false); err != nil {
 			return err
@@ -586,6 +590,27 @@ func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, qu
 		_ = tenantChannel.Close()
 		c.vhostPool.Release(vhost)
 		return fmt.Errorf("failed to set QoS for org %s in vhost %s: %w", orgSlug, vhost, err)
+	}
+
+	// Bind routing keys so all message types arrive on this queue
+	exchangeName := fmt.Sprintf("%s.exchange", orgSlug)
+	bindings := []string{
+		fmt.Sprintf("tenant.%s.device.*.activity_log", orgSlug),
+		fmt.Sprintf("tenant.%s.space.*.entity.*.telemetry", orgSlug),
+		fmt.Sprintf("tenant.%s.space.*.device.*.event", orgSlug),
+		fmt.Sprintf("tenant.%s.transformed.device.location", orgSlug),
+	}
+
+	for _, key := range bindings {
+		if err := tenantChannel.QueueBind(
+			queueName,
+			key,
+			exchangeName,
+			false,
+			nil,
+		); err != nil {
+			log.Printf("WARNING: Failed to bind queue '%s' to '%s' for org %s: %v (continuing without binding)", queueName, key, orgSlug, err)
+		}
 	}
 
 	consumerTag := helpers.MakeConsumerTag(orgSlug, vhost)
@@ -709,7 +734,7 @@ func (c *Client) processTenantMessages(ctx context.Context, tenant *TenantConsum
 				return
 			}
 
-			// Process the message (puts it in messagesChan for bridge to handle)
+			// Process the message
 			c.handleMessage(msg)
 
 			// NOTE: ACK is handled by the bridge layer via AckMessage()
