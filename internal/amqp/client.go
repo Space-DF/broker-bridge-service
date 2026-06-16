@@ -594,23 +594,17 @@ func (c *Client) subscribeToOrganization(ctx context.Context, vhost, orgSlug, qu
 
 	// Bind routing keys so all message types arrive on this queue
 	exchangeName := fmt.Sprintf("%s.exchange", orgSlug)
-	bindings := []string{
-		fmt.Sprintf("tenant.%s.device.*.activity_log", orgSlug),
-		fmt.Sprintf("tenant.%s.space.*.entity.*.telemetry", orgSlug),
-		fmt.Sprintf("tenant.%s.space.*.device.*.event", orgSlug),
-		fmt.Sprintf("tenant.%s.transformed.device.location", orgSlug),
-	}
 
-	for _, key := range bindings {
-		if err := tenantChannel.QueueBind(
-			queueName,
-			key,
-			exchangeName,
-			false,
-			nil,
-		); err != nil {
-			log.Printf("WARNING: Failed to bind queue '%s' to '%s' for org %s: %v (continuing without binding)", queueName, key, orgSlug, err)
-		}
+	bindingRoutingKey := fmt.Sprintf("tenant.%s.broker.#", orgSlug)
+
+	if err := tenantChannel.QueueBind(
+		queueName,
+		bindingRoutingKey,
+		exchangeName,
+		false,
+		nil,
+	); err != nil {
+		log.Printf("WARNING: Failed to bind queue '%s' to '%s' for org %s: %v (continuing without binding)", queueName, bindingRoutingKey, orgSlug, err)
 	}
 
 	consumerTag := helpers.MakeConsumerTag(orgSlug, vhost)
