@@ -1,0 +1,16 @@
+.git
+.gitignore
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+.DS_Store
+**/.DS_Store
+*.md
+.vscode/
+.idea/
+vendor/
