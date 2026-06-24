@@ -27,7 +27,7 @@ func buildEntityTopic(update *models.EntityTelemetryPayload) string {
 
 	space := strings.TrimSpace(update.SpaceSlug)
 
-	if space != "" {
+	if space != "" && space != "unknown" {
 		return fmt.Sprintf("tenant/%s/space/%s/entity/%s/telemetry", org, space, entity)
 	}
 
@@ -74,7 +74,7 @@ func buildEventTopic(event *models.Event) string {
 
 	space := strings.TrimSpace(event.SpaceSlug)
 
-	if space != "" {
+	if space != "" && space != "unknown" {
 		return fmt.Sprintf("tenant/%s/space/%s/device/%s/event", org, space, device)
 	}
 
