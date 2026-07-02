@@ -5,10 +5,7 @@ import (
 	"log"
 )
 
-// unknownProcessor handles unknown message types.
-type unknownProcessor struct {
-	delivery interface{}
-}
+type unknownProcessor struct{}
 
 func (p *unknownProcessor) Publish(ctx context.Context) (string, error) {
 	return "", nil // Just return empty topic

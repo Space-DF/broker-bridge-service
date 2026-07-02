@@ -7,11 +7,9 @@ import (
 	"github.com/Space-DF/broker-bridge-service/internal/models"
 )
 
-// entityTelemetryProcessor handles entity telemetry messages.
 type entityTelemetryProcessor struct {
-	bridge   *Bridge
-	update   *models.EntityTelemetryPayload
-	delivery interface{}
+	bridge *Bridge
+	update *models.EntityTelemetryPayload
 }
 
 func (p *entityTelemetryProcessor) Publish(ctx context.Context) (string, error) {

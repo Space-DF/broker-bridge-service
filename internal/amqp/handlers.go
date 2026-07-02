@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Space-DF/broker-bridge-service/internal/models"
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -25,13 +26,12 @@ var (
 	singletonEventHandler           = &eventHandler{}
 	singletonEntityTelemetryHandler = &entityTelemetryHandler{}
 	singletonLocationUpdateHandler  = &locationUpdateHandler{}
+	singletonActivityLogHandler     = &activityLogHandler{}
 	singletonUnknownHandler         = &unknownHandler{}
 )
 
 // messageKindFromRoutingKey determines the message type from the routing key.
 func messageKindFromRoutingKey(routingKey string) models.MessageKind {
-	// Order matters: check more specific patterns first
-	// Specify by suffix to allow for flexible routing keys while still categorizing correctly
 	switch {
 	case strings.HasSuffix(routingKey, ".event"):
 		// Matches: tenant.{org}.space.{space}.device.{device_id}.event
@@ -42,6 +42,9 @@ func messageKindFromRoutingKey(routingKey string) models.MessageKind {
 	case strings.HasSuffix(routingKey, ".location"):
 		// Matches: tenant.{org}.space.{space}.device.{device_id}.location
 		return models.KindLocationUpdate
+	case strings.HasSuffix(routingKey, ".activity_log"):
+		// Matches: tenant.{org}.device.{device_eui}.activity_log
+		return models.KindActivityLog
 	default:
 		// Unknown routing key pattern - log warning but default to location update for backward compatibility
 		log.Printf("WARNING: Unknown routing key pattern: %s, defaulting to location_update", routingKey)
@@ -61,6 +64,7 @@ func NewHandlerRegistry() *HandlerRegistry {
 			models.KindEvent:           singletonEventHandler,
 			models.KindEntityTelemetry: singletonEntityTelemetryHandler,
 			models.KindLocationUpdate:  singletonLocationUpdateHandler,
+			models.KindActivityLog:     singletonActivityLogHandler,
 		},
 	}
 }
@@ -149,6 +153,38 @@ func (h *locationUpdateHandler) Handle(ctx context.Context, msg amqp.Delivery) (
 		Kind:           models.KindLocationUpdate,
 		LocationUpdate: &locationUpdate,
 		Delivery:       &msg,
+	}
+
+	return messageWithDelivery, nil
+}
+
+type activityLogHandler struct{}
+
+func (h *activityLogHandler) Handle(ctx context.Context, msg amqp.Delivery) (*models.AMQPMessageWithDelivery, error) {
+	var activityLog models.ActivityLog
+	if err := json.Unmarshal(msg.Body, &activityLog); err != nil {
+		return nil, fmt.Errorf("%w: failed to unmarshal activity log: %v", ErrUnhandled, err)
+	}
+
+	if activityLog.DeviceEUI == "" {
+		log.Printf("WARNING: Activity log rejected: DeviceEUI is empty. Routing key: %s", msg.RoutingKey)
+		return nil, ErrUnhandled
+	}
+
+	activityLog.Organization = extractOrgFromRoutingKey(msg.RoutingKey)
+
+	if activityLog.Timestamp.IsZero() {
+		activityLog.Timestamp = time.Now()
+	}
+
+	if activityLog.ID == "" {
+		activityLog.ID = uuid.New().String()
+	}
+
+	messageWithDelivery := &models.AMQPMessageWithDelivery{
+		Kind:        models.KindActivityLog,
+		ActivityLog: &activityLog,
+		Delivery:    &msg,
 	}
 
 	return messageWithDelivery, nil
