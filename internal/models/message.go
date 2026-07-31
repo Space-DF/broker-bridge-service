@@ -57,6 +57,12 @@ type Location struct {
 	Bearing   *float64 `json:"bearing"`
 }
 
+type Threshold struct {
+	Caution  float64 `json:"caution,omitempty"`
+	Critical float64 `json:"critical,omitempty"`
+	Warning  float64 `json:"warning,omitempty"`
+}
+
 // DeviceLocationUpdate represents real-time location updates
 type DeviceLocationUpdate struct {
 	DeviceEUI    string                 `json:"device_eui"`
@@ -78,6 +84,7 @@ type AMQPMessageWithDelivery struct {
 	LocationUpdate *DeviceLocationUpdate
 	EntityUpdate   *EntityTelemetryPayload
 	Event          *Event
+	Alert          *Alert
 	ActivityLog    *ActivityLog
 	Delivery       *amqp.Delivery
 }
@@ -105,6 +112,7 @@ const (
 	KindLocationUpdate  MessageKind = "location_update"
 	KindEntityTelemetry MessageKind = "entity_telemetry"
 	KindEvent           MessageKind = "event"
+	KindAlert           MessageKind = "alert"
 	KindActivityLog     MessageKind = "activity_log"
 	KindSkip            MessageKind = "skip"
 )
@@ -148,6 +156,7 @@ type Event struct {
 	GeofenceName   *string        `json:"geofence_name,omitempty"`
 	Organization   string         `json:"organization,omitempty"`
 	SpaceSlug      string         `json:"space_slug,omitempty"`
+	IsPublic       bool           `json:"is_public,omitempty"`
 	DeviceID       string         `json:"device_id,omitempty"`
 	EntityID       *string        `json:"entity_id,omitempty"`
 	StateID        uuid.UUID      `json:"state_id,omitempty"`
@@ -156,6 +165,24 @@ type Event struct {
 	EventType      string         `json:"event_type,omitempty"`
 	Location       *Location      `json:"location,omitempty"`
 	LNSAlert       *EventLNSAlert `json:"lns_alert,omitempty"`
+}
+
+type Alert struct {
+	ID           int64      `json:"id"`
+	Type         string     `json:"type"`
+	Title        string     `json:"title,omitempty"`
+	Level        *string    `json:"level,omitempty"`
+	Unit         string     `json:"unit,omitempty"`
+	WaterDepth   *string    `json:"water_depth,omitempty"`
+	Organization string     `json:"organization,omitempty"`
+	SpaceSlug    string     `json:"space_slug,omitempty"`
+	IsPublic     bool       `json:"is_public,omitempty"`
+	DeviceID     string     `json:"device_id,omitempty"`
+	EntityID     *string    `json:"entity_id,omitempty"`
+	Message      string     `json:"message,omitempty"`
+	Location     *Location  `json:"location,omitempty"`
+	ReportedAt   time.Time  `json:"reported_at,omitempty"`
+	Threshold    *Threshold `json:"threshold,omitempty"`
 }
 
 type EventLNSAlert struct {

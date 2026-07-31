@@ -37,6 +37,11 @@ func (r *ProcessorRegistry) GetProcessor(msg *models.AMQPMessageWithDelivery) me
 			bridge: r.bridge,
 			update: msg.EntityUpdate,
 		}
+	case models.KindAlert:
+		return &alertProcessor{
+			bridge: r.bridge,
+			alert:  msg.Alert,
+		}
 	case models.KindEvent:
 		return &eventProcessor{
 			bridge: r.bridge,

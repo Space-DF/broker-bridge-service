@@ -231,6 +231,20 @@ func (c *Client) PublishEntityTelemetry(entityUpdate *models.EntityTelemetryPayl
 	return topic, nil
 }
 
+// PublishAlert publishes an alert to a tenant-scoped topic.
+func (c *Client) PublishAlert(alert *models.Alert) (string, error) {
+	if alert == nil {
+		return "", fmt.Errorf("alert is nil")
+	}
+
+	topic := buildAlertTopic(alert)
+	if err := c.Publish(topic, alert); err != nil {
+		return "", err
+	}
+
+	return topic, nil
+}
+
 // PublishEvent publishes an event to a tenant-scoped topic.
 func (c *Client) PublishEvent(event *models.Event) (string, error) {
 	if event == nil {
