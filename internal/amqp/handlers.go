@@ -24,6 +24,7 @@ var ErrUnhandled = fmt.Errorf("message not handled")
 // Singleton handler instances - handlers are stateless, so reuse single instances.
 var (
 	singletonEventHandler           = &eventHandler{}
+	singletonAlertHandler           = &alertHandler{}
 	singletonEntityTelemetryHandler = &entityTelemetryHandler{}
 	singletonLocationUpdateHandler  = &locationUpdateHandler{}
 	singletonActivityLogHandler     = &activityLogHandler{}
@@ -36,6 +37,9 @@ func messageKindFromRoutingKey(routingKey string) models.MessageKind {
 	case strings.HasSuffix(routingKey, ".event"):
 		// Matches: tenant.{org}.space.{space}.device.{device_id}.event
 		return models.KindEvent
+	case strings.HasSuffix(routingKey, ".alert"):
+		// Matches: tenant.{org}.space.{space}.device.{device_id}.alert
+		return models.KindAlert
 	case strings.HasSuffix(routingKey, ".telemetry"):
 		// Matches: tenant.{org}.space.{space}.entity.{entity_id}_{type}.telemetry
 		return models.KindEntityTelemetry
@@ -62,6 +66,7 @@ func NewHandlerRegistry() *HandlerRegistry {
 	return &HandlerRegistry{
 		handlers: map[models.MessageKind]messageHandler{
 			models.KindEvent:           singletonEventHandler,
+			models.KindAlert:           singletonAlertHandler,
 			models.KindEntityTelemetry: singletonEntityTelemetryHandler,
 			models.KindLocationUpdate:  singletonLocationUpdateHandler,
 			models.KindActivityLog:     singletonActivityLogHandler,
@@ -106,6 +111,91 @@ func (h *eventHandler) Handle(ctx context.Context, msg amqp.Delivery) (*models.A
 	}
 
 	return messageWithDelivery, nil
+}
+
+// alertHandler handles alert messages with routing key ending in ".alert".
+type alertHandler struct{}
+
+func (h *alertHandler) Handle(ctx context.Context, msg amqp.Delivery) (*models.AMQPMessageWithDelivery, error) {
+	var alert models.Alert
+	if err := json.Unmarshal(msg.Body, &alert); err == nil && (alert.DeviceID != "" || alert.Message != "" || alert.Title != "" || alert.Level != nil) {
+		alert.Organization = extractOrgFromRoutingKey(msg.RoutingKey)
+		messageWithDelivery := &models.AMQPMessageWithDelivery{
+			Kind:     models.KindAlert,
+			Alert:    &alert,
+			Delivery: &msg,
+		}
+		return messageWithDelivery, nil
+	}
+
+	var event models.Event
+	if err := json.Unmarshal(msg.Body, &event); err != nil {
+		return nil, fmt.Errorf("%w: failed to unmarshal alert/event payload: %v", ErrUnhandled, err)
+	}
+
+	if event.DeviceID == "" {
+		log.Printf("WARNING: Alert message rejected: DeviceID is empty. Routing key: %s", msg.RoutingKey)
+		return nil, ErrUnhandled
+	}
+
+	mappedAlert := mapEventToAlert(&event)
+	mappedAlert.Organization = extractOrgFromRoutingKey(msg.RoutingKey)
+	messageWithDelivery := &models.AMQPMessageWithDelivery{
+		Kind:     models.KindAlert,
+		Alert:    mappedAlert,
+		Delivery: &msg,
+	}
+
+	return messageWithDelivery, nil
+}
+
+func mapEventToAlert(event *models.Event) *models.Alert {
+	if event == nil {
+		return &models.Alert{}
+	}
+
+	var level *string
+	if event.EventLevel != nil {
+		level = event.EventLevel
+	} else if event.LNSAlert != nil {
+		levelValue := event.LNSAlert.Level
+		level = &levelValue
+	}
+
+	message := ""
+	title := event.Title
+	if event.LNSAlert != nil && event.LNSAlert.Message != "" {
+		message = event.LNSAlert.Message
+	}
+	if title == "" {
+		title = message
+	}
+	if message == "" {
+		message = title
+	}
+	if title == "" && event.EventType != "" {
+		title = event.EventType
+	}
+	if message == "" && title != "" {
+		message = title
+	}
+
+	var reportedAt time.Time
+	if event.TimeFiredTs > 0 {
+		reportedAt = time.UnixMilli(event.TimeFiredTs).UTC()
+	}
+
+	return &models.Alert{
+		Type:         "alert",
+		Title:        title,
+		Level:        level,
+		Organization: event.Organization,
+		SpaceSlug:    event.SpaceSlug,
+		DeviceID:     event.DeviceID,
+		EntityID:     event.EntityID,
+		Message:      message,
+		ReportedAt:   reportedAt,
+	}
 }
 
 // entityTelemetryHandler handles entity telemetry messages.
