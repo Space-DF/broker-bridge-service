@@ -57,6 +57,30 @@ func buildTelemetryTopic(update *models.DeviceLocationUpdate) string {
 	return fmt.Sprintf("tenant/%s/space/%s/device/%s/telemetry", org, space, device)
 }
 
+func buildAlertTopic(alert *models.Alert) string {
+	if alert == nil {
+		return "tenant/unknown/device/unknown/alert"
+	}
+
+	org := strings.TrimSpace(alert.Organization)
+	if org == "" {
+		org = "unknown"
+	}
+
+	device := strings.TrimSpace(alert.DeviceID)
+	if device == "" {
+		device = "unknown"
+	}
+
+	space := strings.TrimSpace(alert.SpaceSlug)
+
+	if !alert.IsPublic && space != "" && space != "unknown" {
+		return fmt.Sprintf("tenant/%s/space/%s/device/%s/alert", org, space, device)
+	}
+
+	return fmt.Sprintf("tenant/%s/device/%s/alert", org, device)
+}
+
 func buildEventTopic(event *models.Event) string {
 	if event == nil {
 		return "tenant/unknown/device/unknown/event"
@@ -74,7 +98,7 @@ func buildEventTopic(event *models.Event) string {
 
 	space := strings.TrimSpace(event.SpaceSlug)
 
-	if space != "" && space != "unknown" {
+	if !event.IsPublic && space != "" && space != "unknown" {
 		return fmt.Sprintf("tenant/%s/space/%s/device/%s/event", org, space, device)
 	}
 
