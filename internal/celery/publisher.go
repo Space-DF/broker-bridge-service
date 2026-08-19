@@ -80,7 +80,7 @@ func (p *Publisher) isConnClosed() bool {
 }
 
 // PublishLocationUpdate sends a Celery task to update a device's location.
-func (p *Publisher) PublishLocationUpdate(orgSlug, deviceID string, latitude, longitude float64) error {
+func (p *Publisher) PublishLocationUpdate(orgSlug, deviceID string, latitude, longitude float64, bearing *float64) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -99,6 +99,7 @@ func (p *Publisher) PublishLocationUpdate(orgSlug, deviceID string, latitude, lo
 			"device_id":              deviceID,
 			"latitude":               latitude,
 			"longitude":              longitude,
+			"bearing":                bearing,
 		},
 	}
 

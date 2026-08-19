@@ -45,6 +45,7 @@ func (p *locationUpdateProcessor) PostProcess(ctx context.Context) error {
 		p.update.DeviceID,
 		p.update.Location.Latitude,
 		p.update.Location.Longitude,
+		p.update.Location.Bearing,
 	)
 }
 
